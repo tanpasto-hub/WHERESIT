@@ -69,7 +69,14 @@ export default function Home() {
   const [skipSuggestFor, setSkipSuggestFor] = useState(() => new Set());
   const [editPendingConfirm, setEditPendingConfirm] = useState(null);
   const [editError, setEditError] = useState('');
+  // Drives the fully hands-free "add by voice" flow: true while it's
+  // running, and voiceCaption mirrors whatever is currently being spoken
+  // so people who aren't only listening can still follow along on screen.
+  const [handsFreeActive, setHandsFreeActive] = useState(false);
+  const [voiceCaption, setVoiceCaption] = useState('');
+  const [speechSupported, setSpeechSupported] = useState(false);
   const recognitionRef = useRef(null);
+  const handsFreeCancelRef = useRef(false);
   const itemsRef = useRef(items);
   const router = useRouter();
   const supabase = createClient();
@@ -99,6 +106,7 @@ export default function Home() {
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
     if (SR) setVoiceSupported(true);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) setSpeechSupported(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -158,6 +166,171 @@ export default function Home() {
     setListeningField(null);
   };
 
+  // Speaks a line out loud and resolves once it's finished (or immediately,
+  // if speech synthesis isn't available — the hands-free flow still works,
+  // it just relies on the on-screen caption instead).
+  const speak = (text) => {
+    setVoiceCaption(text);
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !window.speechSynthesis) {
+        resolve();
+        return;
+      }
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        window.speechSynthesis.speak(utter);
+      } catch {
+        resolve();
+      }
+    });
+  };
+
+  // Listens once and resolves with the transcript (or '' on silence/error/
+  // no support). Unlike startVoiceFor, this is promise-based so the
+  // hands-free flow below can await each answer in turn.
+  const listenFor = (label) => new Promise((resolve) => {
+    const SR = typeof window !== 'undefined'
+      ? window.SpeechRecognition || window.webkitSpeechRecognition
+      : null;
+    if (!SR) {
+      resolve('');
+      return;
+    }
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognitionRef.current = recognition;
+    setListeningField(label);
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      setListeningField(null);
+      resolve(value);
+    };
+    recognition.onresult = (event) => finish(event.results[0][0].transcript.trim());
+    recognition.onerror = () => finish('');
+    recognition.onend = () => finish('');
+    try {
+      recognition.start();
+    } catch {
+      finish('');
+    }
+  });
+
+  const soundsAffirmative = (text) => /\b(yes|yeah|yep|yup|correct|right|sure|overwrite|confirm)\b/i.test(text);
+
+  // Cancels an in-progress hands-free flow: stops any speech/listening and
+  // flips the cancel flag the flow checks between steps so it stops early.
+  const stopHandsFree = () => {
+    handsFreeCancelRef.current = true;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* already stopped */ }
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
+    setHandsFreeActive(false);
+    setListeningField(null);
+    setVoiceCaption('');
+  };
+
+  // The fully hands-free "add item" flow: speaks each prompt, listens for
+  // the answer, and — for the near-duplicate and overwrite checks — speaks
+  // the question and accepts a spoken yes/no instead of requiring a tap.
+  const handsFreeAdd = async () => {
+    if (handsFreeActive) return;
+    handsFreeCancelRef.current = false;
+    setHandsFreeActive(true);
+    setShowAdd(true);
+    setAddError('');
+    setPendingConfirm(null);
+    setPendingDuplicate(null);
+    setNewName('');
+    setNewLocation('');
+    setSkipSuggestFor(new Set());
+
+    const cancelled = () => handsFreeCancelRef.current;
+
+    try {
+      await speak("What is it?");
+      if (cancelled()) return;
+      let name = await listenFor('name');
+      if (cancelled()) return;
+      if (!name) {
+        await speak("I didn't catch that. Let's try again whenever you're ready.");
+        return;
+      }
+      setNewName(name);
+
+      const nameMatch = findCloseMatch(name, distinctNames);
+      if (nameMatch) {
+        await speak(`You already have "${nameMatch}" saved. Did you mean that instead of "${name}"? Say yes or no.`);
+        if (cancelled()) return;
+        const resp = await listenFor('confirm');
+        if (cancelled()) return;
+        if (soundsAffirmative(resp)) {
+          name = nameMatch;
+          setNewName(nameMatch);
+        }
+      }
+
+      await speak("Where did you put it?");
+      if (cancelled()) return;
+      let location = await listenFor('location');
+      if (cancelled()) return;
+      if (!location) {
+        await speak("I didn't catch that. Let's try again whenever you're ready.");
+        return;
+      }
+      setNewLocation(location);
+
+      const locationMatch = findCloseMatch(location, distinctLocations);
+      if (locationMatch) {
+        await speak(`You already have "${locationMatch}" saved. Did you mean that instead of "${location}"? Say yes or no.`);
+        if (cancelled()) return;
+        const resp = await listenFor('confirm');
+        if (cancelled()) return;
+        if (soundsAffirmative(resp)) {
+          location = locationMatch;
+          setNewLocation(locationMatch);
+        }
+      }
+
+      const existing = items.find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
+      if (existing) {
+        if (existing.location.trim().toLowerCase() === location.toLowerCase()) {
+          await speak(`"${name}" is already saved in "${existing.location}".`);
+          return;
+        }
+        await speak(`You already have "${name}" saved in "${existing.location}". Should I overwrite it with "${location}"? Say yes or no.`);
+        if (cancelled()) return;
+        const resp = await listenFor('confirm');
+        if (cancelled()) return;
+        if (soundsAffirmative(resp)) {
+          const result = await applyEdit(existing.id, location);
+          await speak(result.ok ? 'Updated.' : (result.message || 'Something went wrong.'));
+        } else {
+          await speak("Okay, I won't change it.");
+        }
+        setNewName('');
+        setNewLocation('');
+        setShowAdd(false);
+        return;
+      }
+
+      const result = await insertItem(name, location);
+      await speak(result.ok ? 'Saved.' : (result.message || 'Something went wrong.'));
+    } finally {
+      setHandsFreeActive(false);
+      setListeningField(null);
+      setVoiceCaption('');
+    }
+  };
+
   const handleSearch = async (searchQ) => {
     const q = (searchQ ?? query).trim();
     if (!q) return;
@@ -206,8 +379,9 @@ export default function Home() {
     setAddError('');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      setAddError('Your session has expired — please sign out and sign in again.');
-      return;
+      const message = 'Your session has expired — please sign out and sign in again.';
+      setAddError(message);
+      return { ok: false, message };
     }
 
     const { data, error } = await supabase
@@ -221,8 +395,9 @@ export default function Home() {
       .single();
 
     if (error) {
-      setAddError(error.message || 'Could not save that item. Try again.');
-      return;
+      const message = error.message || 'Could not save that item. Try again.';
+      setAddError(message);
+      return { ok: false, message };
     }
     if (data) {
       setItems((prev) => [data, ...prev]);
@@ -231,7 +406,9 @@ export default function Home() {
       setShowAdd(false);
       setPendingConfirm(null);
       setSkipSuggestFor(new Set());
+      return { ok: true };
     }
+    return { ok: false, message: 'Could not save that item. Try again.' };
   };
 
   // Runs before every save: checks both fields for a close-but-not-exact
@@ -325,15 +502,18 @@ export default function Home() {
       .single();
 
     if (error) {
-      setEditError(error.message || 'Could not update that. Try again.');
-      return;
+      const message = error.message || 'Could not update that. Try again.';
+      setEditError(message);
+      return { ok: false, message };
     }
     if (data) {
       setItems((prev) => [data, ...prev.filter((i) => i.id !== id)]);
       setEditingId(null);
       setEditLocation('');
       setEditPendingConfirm(null);
+      return { ok: true };
     }
+    return { ok: false, message: 'Could not update that. Try again.' };
   };
 
   // Same near-duplicate check as addItem, but for the location-only edit form.
@@ -627,32 +807,61 @@ export default function Home() {
         <span style={{ fontSize: 12, color: '#8C877A' }}>
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </span>
-        <button
-          onClick={() => {
-            const opening = !showAdd;
-            setShowAdd(opening);
-            setAddError('');
-            setPendingConfirm(null);
-            setPendingDuplicate(null);
-            if (!opening && (listeningField === 'name' || listeningField === 'location')) {
-              stopVoice();
-            }
-          }}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: '#2B4C7E',
-            fontSize: 14,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '4px 0',
-            fontWeight: 500,
-          }}
-        >
-          {showAdd ? <><X size={14} /> Close</> : <><Plus size={14} /> Add item</>}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {voiceSupported && (
+            <button
+              onClick={handsFreeActive ? stopHandsFree : handsFreeAdd}
+              className={handsFreeActive ? 'listening-pulse' : ''}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: handsFreeActive ? '#2B4C7E' : '#4A4842',
+                fontSize: 14,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '4px 0',
+                fontWeight: 500,
+              }}
+            >
+              {handsFreeActive
+                ? <><MicOff size={14} /> Stop</>
+                : <><Mic size={14} /> Add by voice</>}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              const opening = !showAdd;
+              setShowAdd(opening);
+              setAddError('');
+              setPendingConfirm(null);
+              setPendingDuplicate(null);
+              if (!opening) {
+                if (listeningField === 'name' || listeningField === 'location') stopVoice();
+                if (handsFreeActive) stopHandsFree();
+              }
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#2B4C7E',
+              fontSize: 14,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 0',
+              fontWeight: 500,
+            }}
+          >
+            {showAdd ? <><X size={14} /> Close</> : <><Plus size={14} /> Add item</>}
+          </button>
+        </div>
       </div>
+      {voiceSupported && !speechSupported && (
+        <p style={{ fontSize: 11, color: '#8C877A', margin: '-4px 0 12px', textAlign: 'right' }}>
+          This device can listen but can&apos;t read prompts aloud — they&apos;ll show on screen instead.
+        </p>
+      )}
 
       {/* Add form */}
       {showAdd && (
@@ -663,6 +872,42 @@ export default function Home() {
           padding: 16,
           marginBottom: 22,
         }}>
+          {handsFreeActive && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              marginBottom: 14,
+              padding: '10px 12px',
+              background: '#EDEAE0',
+              borderRadius: 6,
+            }}>
+              <p style={{
+                margin: 0,
+                fontSize: 13,
+                color: '#2B4C7E',
+                fontStyle: 'italic',
+                flex: 1,
+              }}>
+                {listeningField ? 'Listening...' : voiceCaption}
+              </p>
+              <button
+                onClick={stopHandsFree}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid #DDD8CA',
+                  borderRadius: 4,
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  color: '#4A4842',
+                  flexShrink: 0,
+                }}
+              >
+                Stop
+              </button>
+            </div>
+          )}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -688,7 +933,7 @@ export default function Home() {
                 padding: '4px 0',
               }}
             />
-            {voiceSupported && (
+            {voiceSupported && !handsFreeActive && (
               <button
                 onClick={listeningField === 'name' ? stopVoice : () => startVoiceFor('name')}
                 className={listeningField === 'name' ? 'listening-pulse' : ''}
@@ -731,7 +976,7 @@ export default function Home() {
                 padding: '6px 0',
               }}
             />
-            {voiceSupported && (
+            {voiceSupported && !handsFreeActive && (
               <button
                 onClick={listeningField === 'location' ? stopVoice : () => startVoiceFor('location')}
                 className={listeningField === 'location' ? 'listening-pulse' : ''}
@@ -752,7 +997,7 @@ export default function Home() {
             )}
           </div>
 
-          {(listeningField === 'name' || listeningField === 'location') && (
+          {!handsFreeActive && (listeningField === 'name' || listeningField === 'location') && (
             <p style={{
               fontSize: 12,
               color: '#2B4C7E',
@@ -765,7 +1010,7 @@ export default function Home() {
 
           {addError && <div style={errorBoxStyle}>{addError}</div>}
 
-          {pendingDuplicate ? (
+          {!handsFreeActive && (pendingDuplicate ? (
             <div style={confirmBoxStyle}>
               <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
                 You already have <strong>&ldquo;{pendingDuplicate.name}&rdquo;</strong> saved in{' '}
@@ -814,7 +1059,7 @@ export default function Home() {
             >
               Save it
             </button>
-          )}
+          ))}
         </div>
       )}
 
