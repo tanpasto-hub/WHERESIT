@@ -33,32 +33,50 @@ Match against the item names using common sense: handle synonyms ("specs"->"glas
 Respond with ONLY valid JSON, no other text and no markdown fences:
 {"found": true|false, "matches": [{"id": "...", "name": "...", "location": "...", "confidence": "high"|"medium"|"low"}], "message": "one short helpful sentence"}`;
 
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Gemini's flash model occasionally returns 503 "high demand" / 429 rate-limit
+  // errors that clear up within a second or two. Retry those a couple of times
+  // with a short backoff before giving up, instead of failing on the first blip.
+  const MAX_ATTEMPTS = 3;
+  const RETRY_STATUSES = new Set([429, 503]);
+
   try {
-    const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.3,
+    let response;
+    let lastErrorText = '';
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      response = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
           },
-        }),
-      }
-    );
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.3,
+            },
+          }),
+        }
+      );
+
+      if (response.ok) break;
+
+      lastErrorText = await response.text();
+      const shouldRetry = RETRY_STATUSES.has(response.status) && attempt < MAX_ATTEMPTS;
+      console.error(`Gemini API error (attempt ${attempt}/${MAX_ATTEMPTS}):`, response.status, lastErrorText);
+      if (!shouldRetry) break;
+      await sleep(attempt * 500); // 500ms, then 1000ms
+    }
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error('Gemini API error:', response.status, text);
       return NextResponse.json({
         found: false,
         matches: [],
-        message: 'AI search failed. Try again in a moment.',
+        message: 'AI search is busy right now. Try again in a moment.',
       });
     }
 
