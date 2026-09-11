@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase-server';
 
-// gemini-3.6-flash can take 5-20+ seconds on a busy attempt. Vercel's
-// default serverless function timeout (10s on some plans) would cut that
-// off mid-request, so give this route more room to actually finish.
-export const maxDuration = 60;
+// Give this route some headroom in case Gemini is briefly slow, though
+// gemini-flash-lite-latest normally responds in well under a second.
+export const maxDuration = 30;
 
 export async function POST(request) {
   // Verify the caller is signed in.
@@ -51,7 +50,7 @@ Respond with ONLY valid JSON, no other text and no markdown fences:
     let lastErrorText = '';
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       response = await fetch(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent',
         {
           method: 'POST',
           headers: {
