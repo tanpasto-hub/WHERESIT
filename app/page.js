@@ -191,7 +191,12 @@ export default function Home() {
   // Listens once and resolves with the transcript (or '' on silence/error/
   // no support). Unlike startVoiceFor, this is promise-based so the
   // hands-free flow below can await each answer in turn.
-  const listenFor = (label) => new Promise((resolve) => {
+  //
+  // If the very first attempt fails almost instantly (under 700ms — before
+  // a person could plausibly have spoken and finished), that's almost
+  // always the microphone still spinning up or a permission hiccup, not
+  // genuine silence, so it retries once on its own before giving up.
+  const listenFor = (label, attempt = 1) => new Promise((resolve) => {
     const SR = typeof window !== 'undefined'
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
@@ -206,9 +211,15 @@ export default function Home() {
     recognitionRef.current = recognition;
     setListeningField(label);
 
+    const startedAt = Date.now();
     let settled = false;
     const finish = (value) => {
       if (settled) return;
+      if (!value && attempt === 1 && !handsFreeCancelRef.current && Date.now() - startedAt < 700) {
+        settled = true;
+        resolve(listenFor(label, 2));
+        return;
+      }
       settled = true;
       setListeningField(null);
       resolve(value);
@@ -238,9 +249,18 @@ export default function Home() {
     setVoiceCaption('');
   };
 
-  // The fully hands-free "add item" flow: speaks each prompt, listens for
-  // the answer, and — for the near-duplicate and overwrite checks — speaks
-  // the question and accepts a spoken yes/no instead of requiring a tap.
+  const soundsLikeDone = (text) => /^\s*(done|no|nope|nothing|that's all|thats all|stop|finish|finished|no more)\b/i.test(text);
+
+  // The fully hands-free "add item" flow. One tap starts it; from then on
+  // it keeps looping — ask for an item, ask where it goes, save, ask for
+  // the next one — until the person says "done" (or something like it) or
+  // taps Stop, so they never have to reach for the screen again mid-flow.
+  //
+  // The very first listen is started immediately, in the same tick as the
+  // tap that triggered this, with the spoken prompt firing alongside it
+  // rather than before it — on a phone that's never granted this site mic
+  // access, waiting even a second before opening the mic (to let a prompt
+  // finish playing first) can make the browser refuse it outright.
   const handsFreeAdd = async () => {
     if (handsFreeActive) return;
     handsFreeCancelRef.current = false;
@@ -254,80 +274,114 @@ export default function Home() {
     setSkipSuggestFor(new Set());
 
     const cancelled = () => handsFreeCancelRef.current;
+    let savedCount = 0;
+    let first = true;
 
     try {
-      await speak("What is it?");
-      if (cancelled()) return;
-      let name = await listenFor('name');
-      if (cancelled()) return;
-      if (!name) {
-        await speak("I didn't catch that. Let's try again whenever you're ready.");
-        return;
-      }
-      setNewName(name);
-
-      const nameMatch = findCloseMatch(name, distinctNames);
-      if (nameMatch) {
-        await speak(`You already have "${nameMatch}" saved. Did you mean that instead of "${name}"? Say yes or no.`);
-        if (cancelled()) return;
-        const resp = await listenFor('confirm');
-        if (cancelled()) return;
-        if (soundsAffirmative(resp)) {
-          name = nameMatch;
-          setNewName(nameMatch);
+      while (true) {
+        let name;
+        if (first) {
+          setVoiceCaption('What is it?');
+          const namePromise = listenFor('name');
+          speak('What is it?');
+          name = await namePromise;
+        } else {
+          await speak('Next item — what is it? Or say "done" if that\'s everything.');
+          if (cancelled()) return;
+          name = await listenFor('name');
         }
-      }
-
-      await speak("Where did you put it?");
-      if (cancelled()) return;
-      let location = await listenFor('location');
-      if (cancelled()) return;
-      if (!location) {
-        await speak("I didn't catch that. Let's try again whenever you're ready.");
-        return;
-      }
-      setNewLocation(location);
-
-      const locationMatch = findCloseMatch(location, distinctLocations);
-      if (locationMatch) {
-        await speak(`You already have "${locationMatch}" saved. Did you mean that instead of "${location}"? Say yes or no.`);
         if (cancelled()) return;
-        const resp = await listenFor('confirm');
-        if (cancelled()) return;
-        if (soundsAffirmative(resp)) {
-          location = locationMatch;
-          setNewLocation(locationMatch);
-        }
-      }
 
-      const existing = items.find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
-      if (existing) {
-        if (existing.location.trim().toLowerCase() === location.toLowerCase()) {
-          await speak(`"${name}" is already saved in "${existing.location}".`);
+        if (!name) {
+          await speak(savedCount > 0
+            ? `Okay, done — I added ${savedCount} ${savedCount === 1 ? 'item' : 'items'}.`
+            : "I didn't catch that. Let's try again whenever you're ready.");
           return;
         }
-        await speak(`You already have "${name}" saved in "${existing.location}". Should I overwrite it with "${location}"? Say yes or no.`);
-        if (cancelled()) return;
-        const resp = await listenFor('confirm');
-        if (cancelled()) return;
-        if (soundsAffirmative(resp)) {
-          const result = await applyEdit(existing.id, location);
-          await speak(result.ok ? 'Updated.' : (result.message || 'Something went wrong.'));
-        } else {
-          await speak("Okay, I won't change it.");
+        if (soundsLikeDone(name)) {
+          await speak(savedCount > 0
+            ? `Done — I added ${savedCount} ${savedCount === 1 ? 'item' : 'items'}.`
+            : 'Okay, nothing added.');
+          return;
         }
+
+        first = false;
+        setNewName(name);
+
+        // Use itemsRef (not the items/distinctNames closed over when this
+        // loop started) so an item saved earlier in the same voice session
+        // is already accounted for on the next round.
+        const nameMatch = findCloseMatch(name, Array.from(new Set(itemsRef.current.map((i) => i.name))));
+        if (nameMatch) {
+          await speak(`You already have "${nameMatch}" saved. Did you mean that instead of "${name}"? Say yes or no.`);
+          if (cancelled()) return;
+          const resp = await listenFor('confirm');
+          if (cancelled()) return;
+          if (soundsAffirmative(resp)) {
+            name = nameMatch;
+            setNewName(nameMatch);
+          }
+        }
+
+        await speak('Where did you put it?');
+        if (cancelled()) return;
+        let location = await listenFor('location');
+        if (cancelled()) return;
+        if (!location) {
+          await speak("I didn't catch that, so I couldn't save that one. Let's keep going.");
+          setNewName('');
+          setNewLocation('');
+          continue;
+        }
+        setNewLocation(location);
+
+        const locationMatch = findCloseMatch(location, Array.from(new Set(itemsRef.current.map((i) => i.location))));
+        if (locationMatch) {
+          await speak(`You already have "${locationMatch}" saved. Did you mean that instead of "${location}"? Say yes or no.`);
+          if (cancelled()) return;
+          const resp = await listenFor('confirm');
+          if (cancelled()) return;
+          if (soundsAffirmative(resp)) {
+            location = locationMatch;
+            setNewLocation(locationMatch);
+          }
+        }
+
+        const existing = itemsRef.current.find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
+        if (existing) {
+          if (existing.location.trim().toLowerCase() === location.toLowerCase()) {
+            await speak(`"${name}" is already saved in "${existing.location}".`);
+          } else {
+            await speak(`You already have "${name}" saved in "${existing.location}". Should I overwrite it with "${location}"? Say yes or no.`);
+            if (cancelled()) return;
+            const resp = await listenFor('confirm');
+            if (cancelled()) return;
+            if (soundsAffirmative(resp)) {
+              const result = await applyEdit(existing.id, location);
+              if (result.ok) savedCount++;
+              await speak(result.ok ? 'Updated.' : (result.message || 'Something went wrong.'));
+            } else {
+              await speak("Okay, I won't change it.");
+            }
+          }
+        } else {
+          const result = await insertItem(name, location, { closeForm: false });
+          if (result.ok) savedCount++;
+          await speak(result.ok ? 'Saved.' : (result.message || 'Something went wrong.'));
+        }
+
+        if (cancelled()) return;
         setNewName('');
         setNewLocation('');
-        setShowAdd(false);
-        return;
+        // loop back and ask for the next item
       }
-
-      const result = await insertItem(name, location);
-      await speak(result.ok ? 'Saved.' : (result.message || 'Something went wrong.'));
     } finally {
       setHandsFreeActive(false);
       setListeningField(null);
       setVoiceCaption('');
+      setNewName('');
+      setNewLocation('');
+      setShowAdd(false);
     }
   };
 
@@ -375,7 +429,9 @@ export default function Home() {
 
   // Actually writes the row to Supabase. Called once both fields have
   // cleared the near-duplicate check (or the user confirmed anyway).
-  const insertItem = async (name, location) => {
+  // closeForm is false during the hands-free loop, which stays open across
+  // multiple items instead of closing after each one.
+  const insertItem = async (name, location, { closeForm = true } = {}) => {
     setAddError('');
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -401,11 +457,13 @@ export default function Home() {
     }
     if (data) {
       setItems((prev) => [data, ...prev]);
-      setNewName('');
-      setNewLocation('');
-      setShowAdd(false);
       setPendingConfirm(null);
       setSkipSuggestFor(new Set());
+      if (closeForm) {
+        setNewName('');
+        setNewLocation('');
+        setShowAdd(false);
+      }
       return { ok: true };
     }
     return { ok: false, message: 'Could not save that item. Try again.' };
@@ -892,7 +950,8 @@ export default function Home() {
           {!handsFreeActive && (
             <p style={{ fontSize: 12, color: '#8C877A', margin: '0 0 12px', lineHeight: 1.4 }}>
               Type both boxes, or tap <Mic size={11} style={{ verticalAlign: -1 }} /> on the first
-              one to add the whole thing by voice.
+              one — then just keep talking, one item after another, and say
+              &ldquo;done&rdquo; when you&apos;re finished.
             </p>
           )}
           <div style={{
