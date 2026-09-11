@@ -637,9 +637,14 @@ export default function Home() {
           }}>
             Where&apos;d I<br />put it
           </h1>
-          <p style={{ fontSize: 13, color: '#8C877A', margin: '10px 0 0' }}>
-            {userEmail || 'Your personal thing-finder'}
+          <p style={{ fontSize: 14, color: '#4A4842', margin: '10px 0 0', lineHeight: 1.4, maxWidth: 340 }}>
+            Save what you own and where it is. Then find it later — by typing or by talking.
           </p>
+          {userEmail && (
+            <p style={{ fontSize: 12, color: '#8C877A', margin: '4px 0 0' }}>
+              Signed in as {userEmail}
+            </p>
+          )}
         </div>
         <button
           onClick={signOut}
@@ -653,9 +658,12 @@ export default function Home() {
             color: '#4A4842',
             display: 'flex',
             alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            flexShrink: 0,
           }}
         >
-          <LogOut size={14} />
+          <LogOut size={14} /> Sign out
         </button>
       </header>
 
@@ -795,73 +803,46 @@ export default function Home() {
         </div>
       )}
 
-      {/* Divider with count + add */}
+      {/* Divider with count + add — one clear button, no separate "voice mode" */}
       <div style={{
         display: 'flex',
-        alignItems: 'baseline',
+        alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 12,
-        paddingBottom: 8,
+        marginBottom: 16,
+        paddingBottom: 10,
         borderBottom: '1px solid #DDD8CA',
       }}>
         <span style={{ fontSize: 12, color: '#8C877A' }}>
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {voiceSupported && (
-            <button
-              onClick={handsFreeActive ? stopHandsFree : handsFreeAdd}
-              className={handsFreeActive ? 'listening-pulse' : ''}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: handsFreeActive ? '#2B4C7E' : '#4A4842',
-                fontSize: 14,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '4px 0',
-                fontWeight: 500,
-              }}
-            >
-              {handsFreeActive
-                ? <><MicOff size={14} /> Stop</>
-                : <><Mic size={14} /> Add by voice</>}
-            </button>
-          )}
-          <button
-            onClick={() => {
-              const opening = !showAdd;
-              setShowAdd(opening);
-              setAddError('');
-              setPendingConfirm(null);
-              setPendingDuplicate(null);
-              if (!opening) {
-                if (listeningField === 'name' || listeningField === 'location') stopVoice();
-                if (handsFreeActive) stopHandsFree();
-              }
-            }}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#2B4C7E',
-              fontSize: 14,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 0',
-              fontWeight: 500,
-            }}
-          >
-            {showAdd ? <><X size={14} /> Close</> : <><Plus size={14} /> Add item</>}
-          </button>
-        </div>
+        <button
+          onClick={() => {
+            const opening = !showAdd;
+            setShowAdd(opening);
+            setAddError('');
+            setPendingConfirm(null);
+            setPendingDuplicate(null);
+            if (!opening) {
+              if (listeningField === 'name' || listeningField === 'location') stopVoice();
+              if (handsFreeActive) stopHandsFree();
+            }
+          }}
+          style={{
+            background: showAdd ? 'transparent' : '#1B1D1A',
+            color: showAdd ? '#4A4842' : '#FAF9F3',
+            border: showAdd ? '1px solid #DDD8CA' : 'none',
+            borderRadius: 6,
+            padding: '9px 16px',
+            fontSize: 14,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            fontWeight: 500,
+          }}
+        >
+          {showAdd ? <><X size={14} /> Close</> : <><Plus size={15} /> Add item</>}
+        </button>
       </div>
-      {voiceSupported && !speechSupported && (
-        <p style={{ fontSize: 11, color: '#8C877A', margin: '-4px 0 12px', textAlign: 'right' }}>
-          This device can listen but can&apos;t read prompts aloud — they&apos;ll show on screen instead.
-        </p>
-      )}
 
       {/* Add form */}
       {showAdd && (
@@ -908,6 +889,12 @@ export default function Home() {
               </button>
             </div>
           )}
+          {!handsFreeActive && (
+            <p style={{ fontSize: 12, color: '#8C877A', margin: '0 0 12px', lineHeight: 1.4 }}>
+              Type both boxes, or tap <Mic size={11} style={{ verticalAlign: -1 }} /> on the first
+              one to add the whole thing by voice.
+            </p>
+          )}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -935,12 +922,12 @@ export default function Home() {
             />
             {voiceSupported && !handsFreeActive && (
               <button
-                onClick={listeningField === 'name' ? stopVoice : () => startVoiceFor('name')}
-                className={listeningField === 'name' ? 'listening-pulse' : ''}
-                aria-label={listeningField === 'name' ? 'Stop listening' : 'Say what it is'}
+                onClick={handsFreeAdd}
+                aria-label="Add the whole item by voice"
+                title="Add the whole item by voice"
                 style={{
-                  background: listeningField === 'name' ? '#2B4C7E' : 'transparent',
-                  color: listeningField === 'name' ? '#FAF9F3' : '#8C877A',
+                  background: '#1B1D1A',
+                  color: '#FAF9F3',
                   border: 'none',
                   borderRadius: 6,
                   padding: 7,
@@ -949,7 +936,7 @@ export default function Home() {
                   flexShrink: 0,
                 }}
               >
-                {listeningField === 'name' ? <MicOff size={15} /> : <Mic size={15} />}
+                <Mic size={15} />
               </button>
             )}
           </div>
@@ -1078,9 +1065,28 @@ export default function Home() {
           }}>
             Nothing here yet.
           </p>
-          <p style={{ marginTop: 8, fontSize: 14 }}>
-            Add your first item to start remembering.
+          <p style={{ marginTop: 8, fontSize: 14, marginBottom: 20 }}>
+            Add your first item below to start remembering.
           </p>
+          {!showAdd && (
+            <button
+              onClick={() => setShowAdd(true)}
+              style={{
+                background: '#1B1D1A',
+                color: '#FAF9F3',
+                border: 'none',
+                borderRadius: 6,
+                padding: '10px 20px',
+                fontSize: 14,
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Plus size={15} /> Add your first item
+            </button>
+          )}
         </div>
       ) : (
         <div>
@@ -1198,7 +1204,7 @@ export default function Home() {
                 </div>
 
                 {editingId !== item.id && (
-                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                     <button
                       onClick={() => startEdit(item)}
                       title="Update location"
@@ -1207,11 +1213,15 @@ export default function Home() {
                         background: 'transparent',
                         border: '1px solid #DDD8CA',
                         borderRadius: 4,
-                        padding: '7px 9px',
+                        padding: '7px 10px',
                         color: '#4A4842',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        fontSize: 12,
                       }}
                     >
-                      <Pencil size={13} />
+                      <Pencil size={13} /> Edit
                     </button>
                     <button
                       onClick={() => {
@@ -1223,11 +1233,15 @@ export default function Home() {
                         background: 'transparent',
                         border: '1px solid #DDD8CA',
                         borderRadius: 4,
-                        padding: '7px 9px',
+                        padding: '7px 10px',
                         color: '#8C877A',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        fontSize: 12,
                       }}
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={13} /> Delete
                     </button>
                   </div>
                 )}
