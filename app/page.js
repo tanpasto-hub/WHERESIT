@@ -52,7 +52,8 @@ export default function Home() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [isListening, setIsListening] = useState(false);
+  // Which field is currently being captured by voice: null, 'search', 'name', or 'location'.
+  const [listeningField, setListeningField] = useState(null);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [searchResult, setSearchResult] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -64,6 +65,7 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState('');
   const [addError, setAddError] = useState('');
   const [pendingConfirm, setPendingConfirm] = useState(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState(null);
   const [skipSuggestFor, setSkipSuggestFor] = useState(() => new Set());
   const [editPendingConfirm, setEditPendingConfirm] = useState(null);
   const [editError, setEditError] = useState('');
@@ -96,22 +98,7 @@ export default function Home() {
     const SR = typeof window !== 'undefined'
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
-    if (SR) {
-      setVoiceSupported(true);
-      const recognition = new SR();
-      recognition.lang = 'en-US';
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setQuery(transcript);
-        setIsListening(false);
-        handleSearch(transcript);
-      };
-      recognition.onerror = () => setIsListening(false);
-      recognition.onend = () => setIsListening(false);
-      recognitionRef.current = recognition;
-    }
+    if (SR) setVoiceSupported(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -125,20 +112,50 @@ export default function Home() {
     setLoading(false);
   };
 
-  const startListening = () => {
-    if (!recognitionRef.current) return;
-    setSearchResult(null);
-    setIsListening(true);
+  // Generic voice capture for any of the three text fields — search, the
+  // add-item "what", and the add-item "where". Builds a fresh recognizer
+  // each time (simpler and more reliable than reusing one long-lived
+  // instance) and routes the transcript to the right place when it lands.
+  const startVoiceFor = (field) => {
+    const SR = typeof window !== 'undefined'
+      ? window.SpeechRecognition || window.webkitSpeechRecognition
+      : null;
+    if (!SR) return;
+
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognitionRef.current = recognition;
+
+    if (field === 'search') setSearchResult(null);
+    else setAddError('');
+
+    setListeningField(field);
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setListeningField(null);
+      if (field === 'search') {
+        setQuery(transcript);
+        handleSearch(transcript);
+      } else if (field === 'name') {
+        setNewName(transcript);
+      } else if (field === 'location') {
+        setNewLocation(transcript);
+      }
+    };
+    recognition.onerror = () => setListeningField(null);
+    recognition.onend = () => setListeningField(null);
     try {
-      recognitionRef.current.start();
+      recognition.start();
     } catch {
-      setIsListening(false);
+      setListeningField(null);
     }
   };
 
-  const stopListening = () => {
+  const stopVoice = () => {
     if (recognitionRef.current) recognitionRef.current.stop();
-    setIsListening(false);
+    setListeningField(null);
   };
 
   const handleSearch = async (searchQ) => {
@@ -244,6 +261,19 @@ export default function Home() {
       }
     }
 
+    // Exact-name match against something already saved — offer to update
+    // its location instead of silently creating a second entry with the
+    // same name (which would make search ambiguous).
+    const existing = items.find((i) => i.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      if (existing.location.trim().toLowerCase() === location.toLowerCase()) {
+        setAddError(`"${name}" is already saved in "${existing.location}".`);
+        return;
+      }
+      setPendingDuplicate({ existingItem: existing, name, location });
+      return;
+    }
+
     insertItem(name, location);
   };
 
@@ -257,6 +287,22 @@ export default function Home() {
       setSkipSuggestFor((prev) => new Set(prev).add(`${field}:${typed.toLowerCase()}`));
     }
     setPendingConfirm(null);
+  };
+
+  // Resolves the "you already have this, overwrite it?" prompt. Overwriting
+  // updates the existing row's location (same as editing it) rather than
+  // inserting a duplicate; canceling just dismisses the prompt so the
+  // person can change what they typed.
+  const resolveDuplicateConfirm = async (overwrite) => {
+    if (!pendingDuplicate) return;
+    const { existingItem, location } = pendingDuplicate;
+    if (overwrite) {
+      await applyEdit(existingItem.id, location);
+      setNewName('');
+      setNewLocation('');
+      setShowAdd(false);
+    }
+    setPendingDuplicate(null);
   };
 
   const startEdit = (item) => {
@@ -476,11 +522,11 @@ export default function Home() {
           )}
           {voiceSupported && (
             <button
-              onClick={isListening ? stopListening : startListening}
-              className={isListening ? 'listening-pulse' : ''}
-              aria-label={isListening ? 'Stop listening' : 'Voice search'}
+              onClick={listeningField === 'search' ? stopVoice : () => startVoiceFor('search')}
+              className={listeningField === 'search' ? 'listening-pulse' : ''}
+              aria-label={listeningField === 'search' ? 'Stop listening' : 'Voice search'}
               style={{
-                background: isListening ? '#2B4C7E' : '#1B1D1A',
+                background: listeningField === 'search' ? '#2B4C7E' : '#1B1D1A',
                 color: '#FAF9F3',
                 border: 'none',
                 borderRadius: 7,
@@ -490,7 +536,7 @@ export default function Home() {
                 flexShrink: 0,
               }}
             >
-              {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+              {listeningField === 'search' ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
           )}
         </div>
@@ -499,7 +545,7 @@ export default function Home() {
             Voice search needs Chrome, Edge, or Safari
           </p>
         )}
-        {isListening && (
+        {listeningField === 'search' && (
           <p style={{
             fontSize: 13,
             color: '#2B4C7E',
@@ -583,9 +629,14 @@ export default function Home() {
         </span>
         <button
           onClick={() => {
-            setShowAdd(!showAdd);
+            const opening = !showAdd;
+            setShowAdd(opening);
             setAddError('');
             setPendingConfirm(null);
+            setPendingDuplicate(null);
+            if (!opening && (listeningField === 'name' || listeningField === 'location')) {
+              stopVoice();
+            }
           }}
           style={{
             background: 'none',
@@ -612,45 +663,125 @@ export default function Home() {
           padding: 16,
           marginBottom: 22,
         }}>
-          <input
-            type="text"
-            list="wdipi-name-list"
-            placeholder="What is it?"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            autoFocus
-            style={{
-              width: '100%',
-              border: 'none',
-              background: 'transparent',
-              fontSize: 22,
-              fontFamily: 'Instrument Serif, serif',
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            borderBottom: '1px solid #DDD8CA',
+            marginBottom: 10,
+          }}>
+            <input
+              type="text"
+              list="wdipi-name-list"
+              placeholder="What is it?"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              autoFocus
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: 'none',
+                background: 'transparent',
+                fontSize: 22,
+                fontFamily: 'Instrument Serif, serif',
+                fontStyle: 'italic',
+                padding: '4px 0',
+              }}
+            />
+            {voiceSupported && (
+              <button
+                onClick={listeningField === 'name' ? stopVoice : () => startVoiceFor('name')}
+                className={listeningField === 'name' ? 'listening-pulse' : ''}
+                aria-label={listeningField === 'name' ? 'Stop listening' : 'Say what it is'}
+                style={{
+                  background: listeningField === 'name' ? '#2B4C7E' : 'transparent',
+                  color: listeningField === 'name' ? '#FAF9F3' : '#8C877A',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: 7,
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {listeningField === 'name' ? <MicOff size={15} /> : <Mic size={15} />}
+              </button>
+            )}
+          </div>
+
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            marginBottom: 10,
+          }}>
+            <input
+              type="text"
+              list="wdipi-location-list"
+              placeholder="Where did you put it?"
+              value={newLocation}
+              onChange={(e) => setNewLocation(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addItem()}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: 'none',
+                background: 'transparent',
+                fontSize: 15,
+                padding: '6px 0',
+              }}
+            />
+            {voiceSupported && (
+              <button
+                onClick={listeningField === 'location' ? stopVoice : () => startVoiceFor('location')}
+                className={listeningField === 'location' ? 'listening-pulse' : ''}
+                aria-label={listeningField === 'location' ? 'Stop listening' : 'Say where you put it'}
+                style={{
+                  background: listeningField === 'location' ? '#2B4C7E' : 'transparent',
+                  color: listeningField === 'location' ? '#FAF9F3' : '#8C877A',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: 7,
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {listeningField === 'location' ? <MicOff size={15} /> : <Mic size={15} />}
+              </button>
+            )}
+          </div>
+
+          {(listeningField === 'name' || listeningField === 'location') && (
+            <p style={{
+              fontSize: 12,
+              color: '#2B4C7E',
               fontStyle: 'italic',
-              padding: '4px 0',
-              borderBottom: '1px solid #DDD8CA',
-              marginBottom: 10,
-            }}
-          />
-          <input
-            type="text"
-            list="wdipi-location-list"
-            placeholder="Where did you put it?"
-            value={newLocation}
-            onChange={(e) => setNewLocation(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addItem()}
-            style={{
-              width: '100%',
-              border: 'none',
-              background: 'transparent',
-              fontSize: 15,
-              padding: '6px 0',
-              marginBottom: 14,
-            }}
-          />
+              margin: '0 0 14px',
+            }}>
+              Listening... say {listeningField === 'name' ? 'what it is' : 'where you put it'}
+            </p>
+          )}
 
           {addError && <div style={errorBoxStyle}>{addError}</div>}
 
-          {pendingConfirm ? (
+          {pendingDuplicate ? (
+            <div style={confirmBoxStyle}>
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
+                You already have <strong>&ldquo;{pendingDuplicate.name}&rdquo;</strong> saved in{' '}
+                <strong>&ldquo;{pendingDuplicate.existingItem.location}&rdquo;</strong>. Overwrite it with{' '}
+                <strong>&ldquo;{pendingDuplicate.location}&rdquo;</strong>?
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button style={confirmBtnStyle} onClick={() => resolveDuplicateConfirm(true)}>
+                  Yes, overwrite
+                </button>
+                <button style={confirmBtnGhostStyle} onClick={() => resolveDuplicateConfirm(false)}>
+                  No, cancel
+                </button>
+              </div>
+            </div>
+          ) : pendingConfirm ? (
             <div style={confirmBoxStyle}>
               <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
                 You already have <strong>&ldquo;{pendingConfirm.suggestion}&rdquo;</strong> saved.
