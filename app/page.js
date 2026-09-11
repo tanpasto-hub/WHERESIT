@@ -1,11 +1,52 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Search, Mic, MicOff, Plus, X, Check, Pencil, Trash2, Loader2, LogOut,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase-browser';
+
+// Simple Levenshtein edit distance — used to catch near-duplicate typos
+// ("ofice" vs "office") without pulling in a library.
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+// Finds an existing value that's close-but-not-identical to what was typed,
+// so we can ask "did you mean X?" instead of silently creating a near-duplicate.
+function findCloseMatch(value, candidates) {
+  const typed = value.trim();
+  if (typed.length < 3) return null;
+  const typedLower = typed.toLowerCase();
+  if (candidates.some((c) => c.toLowerCase() === typedLower)) return null;
+
+  let best = null;
+  let bestDist = Infinity;
+  for (const c of candidates) {
+    const dist = levenshtein(typedLower, c.toLowerCase());
+    const threshold = Math.max(1, Math.floor(Math.max(typedLower.length, c.length) * 0.3));
+    if (dist <= threshold && dist < bestDist) {
+      bestDist = dist;
+      best = c;
+    }
+  }
+  return best;
+}
 
 export default function Home() {
   const [items, setItems] = useState([]);
@@ -21,6 +62,11 @@ export default function Home() {
   const [editingId, setEditingId] = useState(null);
   const [editLocation, setEditLocation] = useState('');
   const [userEmail, setUserEmail] = useState('');
+  const [addError, setAddError] = useState('');
+  const [pendingConfirm, setPendingConfirm] = useState(null);
+  const [skipSuggestFor, setSkipSuggestFor] = useState(() => new Set());
+  const [editPendingConfirm, setEditPendingConfirm] = useState(null);
+  const [editError, setEditError] = useState('');
   const recognitionRef = useRef(null);
   const itemsRef = useRef(items);
   const router = useRouter();
@@ -28,6 +74,17 @@ export default function Home() {
 
   // Keep a ref to items so the voice-recognition callback always sees fresh data.
   useEffect(() => { itemsRef.current = items; }, [items]);
+
+  // Existing names/locations — power the "Where"/"What" suggestion dropdowns
+  // and the near-duplicate ("did you mean X?") check below.
+  const distinctLocations = useMemo(
+    () => Array.from(new Set(items.map((i) => i.location))).sort((a, b) => a.localeCompare(b)),
+    [items]
+  );
+  const distinctNames = useMemo(
+    () => Array.from(new Set(items.map((i) => i.name))).sort((a, b) => a.localeCompare(b)),
+    [items]
+  );
 
   useEffect(() => {
     (async () => {
@@ -126,52 +183,132 @@ export default function Home() {
     }
   };
 
-  const addItem = async () => {
-    if (!newName.trim() || !newLocation.trim()) return;
+  // Actually writes the row to Supabase. Called once both fields have
+  // cleared the near-duplicate check (or the user confirmed anyway).
+  const insertItem = async (name, location) => {
+    setAddError('');
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setAddError('Your session has expired — please sign out and sign in again.');
+      return;
+    }
 
     const { data, error } = await supabase
       .from('items')
       .insert({
         user_id: user.id,
-        name: newName.trim(),
-        location: newLocation.trim(),
+        name,
+        location,
       })
       .select()
       .single();
 
-    if (!error && data) {
-      setItems([data, ...items]);
+    if (error) {
+      setAddError(error.message || 'Could not save that item. Try again.');
+      return;
+    }
+    if (data) {
+      setItems((prev) => [data, ...prev]);
       setNewName('');
       setNewLocation('');
       setShowAdd(false);
+      setPendingConfirm(null);
+      setSkipSuggestFor(new Set());
     }
+  };
+
+  // Runs before every save: checks both fields for a close-but-not-exact
+  // match against what's already saved, and asks for confirmation first
+  // instead of silently creating a near-duplicate (e.g. "Ofice" vs "Office").
+  const addItem = () => {
+    const name = newName.trim();
+    const location = newLocation.trim();
+    if (!name || !location) return;
+    setAddError('');
+
+    const nameKey = `name:${name.toLowerCase()}`;
+    const locationKey = `location:${location.toLowerCase()}`;
+
+    if (!skipSuggestFor.has(nameKey)) {
+      const nameMatch = findCloseMatch(name, distinctNames);
+      if (nameMatch) {
+        setPendingConfirm({ field: 'name', typed: name, suggestion: nameMatch });
+        return;
+      }
+    }
+    if (!skipSuggestFor.has(locationKey)) {
+      const locationMatch = findCloseMatch(location, distinctLocations);
+      if (locationMatch) {
+        setPendingConfirm({ field: 'location', typed: location, suggestion: locationMatch });
+        return;
+      }
+    }
+
+    insertItem(name, location);
+  };
+
+  const resolvePendingConfirm = (useSuggestion) => {
+    if (!pendingConfirm) return;
+    const { field, typed, suggestion } = pendingConfirm;
+    if (useSuggestion) {
+      if (field === 'name') setNewName(suggestion);
+      else setNewLocation(suggestion);
+    } else {
+      setSkipSuggestFor((prev) => new Set(prev).add(`${field}:${typed.toLowerCase()}`));
+    }
+    setPendingConfirm(null);
   };
 
   const startEdit = (item) => {
     setEditingId(item.id);
     setEditLocation(item.location);
+    setEditError('');
+    setEditPendingConfirm(null);
   };
 
-  const saveEdit = async (id) => {
-    if (!editLocation.trim()) return;
+  const applyEdit = async (id, location) => {
+    setEditError('');
     const { data, error } = await supabase
       .from('items')
       .update({
-        location: editLocation.trim(),
+        location,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
       .select()
       .single();
 
-    if (!error && data) {
-      const others = items.filter((i) => i.id !== id);
-      setItems([data, ...others]);
+    if (error) {
+      setEditError(error.message || 'Could not update that. Try again.');
+      return;
+    }
+    if (data) {
+      setItems((prev) => [data, ...prev.filter((i) => i.id !== id)]);
       setEditingId(null);
       setEditLocation('');
+      setEditPendingConfirm(null);
     }
+  };
+
+  // Same near-duplicate check as addItem, but for the location-only edit form.
+  const saveEdit = (id) => {
+    const location = editLocation.trim();
+    if (!location) return;
+    setEditError('');
+
+    const locationMatch = findCloseMatch(location, distinctLocations);
+    if (locationMatch) {
+      setEditPendingConfirm({ typed: location, suggestion: locationMatch });
+      return;
+    }
+    applyEdit(id, location);
+  };
+
+  const resolveEditConfirm = (id, useSuggestion) => {
+    if (!editPendingConfirm) return;
+    const { typed, suggestion } = editPendingConfirm;
+    setEditPendingConfirm(null);
+    applyEdit(id, useSuggestion ? suggestion : typed);
   };
 
   const deleteItem = async (id) => {
@@ -179,6 +316,8 @@ export default function Home() {
     if (!error) {
       setItems(items.filter((i) => i.id !== id));
       if (searchResult?.matches?.some((m) => m.id === id)) setSearchResult(null);
+    } else {
+      setAddError(error.message || 'Could not delete that item. Try again.');
     }
   };
 
@@ -207,6 +346,39 @@ export default function Home() {
     return `${Math.floor(months / 12)}y ago`;
   };
 
+  const confirmBoxStyle = {
+    background: '#F5EFDC',
+    border: '1px solid #D8C88A',
+    borderRadius: 6,
+    padding: '12px 14px',
+    marginBottom: 14,
+  };
+  const confirmBtnStyle = {
+    background: '#1B1D1A',
+    color: '#FAF9F3',
+    border: 'none',
+    borderRadius: 5,
+    padding: '7px 12px',
+    fontSize: 13,
+    fontWeight: 500,
+  };
+  const confirmBtnGhostStyle = {
+    background: 'transparent',
+    color: '#4A4842',
+    border: '1px solid #DDD8CA',
+    borderRadius: 5,
+    padding: '7px 12px',
+    fontSize: 13,
+  };
+  const errorBoxStyle = {
+    fontSize: 13,
+    color: '#8B2E1C',
+    marginBottom: 14,
+    padding: '10px 12px',
+    background: '#F5E3DC',
+    borderRadius: 6,
+  };
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -214,6 +386,14 @@ export default function Home() {
       maxWidth: 640,
       margin: '0 auto',
     }}>
+      {/* Shared suggestion lists for the "What"/"Where" inputs below. */}
+      <datalist id="wdipi-name-list">
+        {distinctNames.map((n) => <option key={n} value={n} />)}
+      </datalist>
+      <datalist id="wdipi-location-list">
+        {distinctLocations.map((l) => <option key={l} value={l} />)}
+      </datalist>
+
       {/* Header */}
       <header style={{
         marginBottom: 26,
@@ -402,7 +582,11 @@ export default function Home() {
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </span>
         <button
-          onClick={() => setShowAdd(!showAdd)}
+          onClick={() => {
+            setShowAdd(!showAdd);
+            setAddError('');
+            setPendingConfirm(null);
+          }}
           style={{
             background: 'none',
             border: 'none',
@@ -430,6 +614,7 @@ export default function Home() {
         }}>
           <input
             type="text"
+            list="wdipi-name-list"
             placeholder="What is it?"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -448,6 +633,7 @@ export default function Home() {
           />
           <input
             type="text"
+            list="wdipi-location-list"
             placeholder="Where did you put it?"
             value={newLocation}
             onChange={(e) => setNewLocation(e.target.value)}
@@ -461,23 +647,43 @@ export default function Home() {
               marginBottom: 14,
             }}
           />
-          <button
-            onClick={addItem}
-            disabled={!newName.trim() || !newLocation.trim()}
-            style={{
-              background: '#1B1D1A',
-              color: '#FAF9F3',
-              border: 'none',
-              borderRadius: 6,
-              padding: '10px 18px',
-              fontSize: 14,
-              fontWeight: 500,
-              opacity: newName.trim() && newLocation.trim() ? 1 : 0.4,
-              cursor: newName.trim() && newLocation.trim() ? 'pointer' : 'not-allowed',
-            }}
-          >
-            Save it
-          </button>
+
+          {addError && <div style={errorBoxStyle}>{addError}</div>}
+
+          {pendingConfirm ? (
+            <div style={confirmBoxStyle}>
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
+                You already have <strong>&ldquo;{pendingConfirm.suggestion}&rdquo;</strong> saved.
+                Did you mean that instead of &ldquo;{pendingConfirm.typed}&rdquo;?
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button style={confirmBtnStyle} onClick={() => resolvePendingConfirm(true)}>
+                  Use &ldquo;{pendingConfirm.suggestion}&rdquo;
+                </button>
+                <button style={confirmBtnGhostStyle} onClick={() => resolvePendingConfirm(false)}>
+                  No, keep &ldquo;{pendingConfirm.typed}&rdquo;
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={addItem}
+              disabled={!newName.trim() || !newLocation.trim()}
+              style={{
+                background: '#1B1D1A',
+                color: '#FAF9F3',
+                border: 'none',
+                borderRadius: 6,
+                padding: '10px 18px',
+                fontSize: 14,
+                fontWeight: 500,
+                opacity: newName.trim() && newLocation.trim() ? 1 : 0.4,
+                cursor: newName.trim() && newLocation.trim() ? 'pointer' : 'not-allowed',
+              }}
+            >
+              Save it
+            </button>
+          )}
         </div>
       )}
 
@@ -527,6 +733,7 @@ export default function Home() {
                     <div style={{ marginTop: 10 }}>
                       <input
                         type="text"
+                        list="wdipi-location-list"
                         value={editLocation}
                         onChange={(e) => setEditLocation(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && saveEdit(item.id)}
@@ -540,37 +747,62 @@ export default function Home() {
                           borderRadius: 4,
                         }}
                       />
-                      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                        <button
-                          onClick={() => saveEdit(item.id)}
-                          style={{
-                            background: '#2B4C7E',
-                            color: '#FAF9F3',
-                            border: 'none',
-                            borderRadius: 4,
-                            padding: '6px 12px',
-                            fontSize: 13,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <Check size={13} /> Update
-                        </button>
-                        <button
-                          onClick={() => { setEditingId(null); setEditLocation(''); }}
-                          style={{
-                            background: 'transparent',
-                            color: '#8C877A',
-                            border: '1px solid #DDD8CA',
-                            borderRadius: 4,
-                            padding: '6px 12px',
-                            fontSize: 13,
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+
+                      {editError && <div style={{ ...errorBoxStyle, marginTop: 8 }}>{editError}</div>}
+
+                      {editPendingConfirm ? (
+                        <div style={{ ...confirmBoxStyle, marginTop: 8, marginBottom: 0 }}>
+                          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#4A4842' }}>
+                            You already have <strong>&ldquo;{editPendingConfirm.suggestion}&rdquo;</strong> saved.
+                            Did you mean that instead of &ldquo;{editPendingConfirm.typed}&rdquo;?
+                          </p>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button style={confirmBtnStyle} onClick={() => resolveEditConfirm(item.id, true)}>
+                              Use &ldquo;{editPendingConfirm.suggestion}&rdquo;
+                            </button>
+                            <button style={confirmBtnGhostStyle} onClick={() => resolveEditConfirm(item.id, false)}>
+                              No, keep &ldquo;{editPendingConfirm.typed}&rdquo;
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                          <button
+                            onClick={() => saveEdit(item.id)}
+                            style={{
+                              background: '#2B4C7E',
+                              color: '#FAF9F3',
+                              border: 'none',
+                              borderRadius: 4,
+                              padding: '6px 12px',
+                              fontSize: 13,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <Check size={13} /> Update
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingId(null);
+                              setEditLocation('');
+                              setEditError('');
+                              setEditPendingConfirm(null);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              color: '#8C877A',
+                              border: '1px solid #DDD8CA',
+                              borderRadius: 4,
+                              padding: '6px 12px',
+                              fontSize: 13,
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <>
