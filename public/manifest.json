@@ -4,8 +4,8 @@
   "description": "Your personal thing-finder",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#FFF0E8",
-  "theme_color": "#FFF0E8",
+  "background_color": "#E3F2F5",
+  "theme_color": "#E3F2F5",
   "orientation": "portrait",
   "icons": [
     {

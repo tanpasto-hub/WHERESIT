@@ -87,6 +87,60 @@ const THEMES = {
   },
 };
 
+// A small, thoughtful set of original lines about remembering, tidying, and
+// peace of mind — themed for an app about keeping track of your things.
+// One is picked per person per day (see quoteOfDay below) rather than
+// fetched from an external service, so this never depends on a third-party
+// API being up.
+const QUOTES = [
+  'A place for everything brings a little more peace to every day.',
+  'Small order today means less searching tomorrow.',
+  'The things we put away carefully tend to stay close to us.',
+  'Clarity begins with knowing where things are.',
+  'A tidy corner is a calm corner.',
+  "What you remember to put away, you'll remember to find.",
+  'Little habits build a home that works for you.',
+  'Every item has a home; every home deserves a little order.',
+  'The best time to remember where you put it is right when you put it there.',
+  'A calm space makes room for a calm mind.',
+  'Progress is a drawer that closes easily.',
+  'Today, put one more thing exactly where it belongs.',
+  "Order isn't perfection — it's just knowing where to look.",
+  'The things that matter deserve a place that matters.',
+  'A little care now saves a lot of searching later.',
+  'Home is easier to love when you can find what you need in it.',
+  'Slow down long enough to remember where you set it down.',
+  'One small habit, repeated daily, becomes a tidy life.',
+  "You're not disorganized — you just haven't found your system yet.",
+  'The best organizing system is the one you actually use.',
+  'Peace of mind starts with knowing where your keys are.',
+  'Every found item is a small victory — celebrate it.',
+  'Simplify what you own, and you simplify your mind.',
+  'A well-placed thing is a gift to your future self.',
+  'Today is a good day to put something back where it belongs.',
+  'Remembering starts with noticing.',
+  'Your home should work for you, not the other way around.',
+  'Small steps toward order add up to a life with less stress.',
+  "The things you love deserve a place you'll remember.",
+  'A clear space clears the mind.',
+  "You don't have to be perfect — just a little more mindful.",
+  'Every day is a chance to build a habit that serves you.',
+  'What gets a home, gets found.',
+  'Take a breath, put it down gently, and remember where.',
+  'Small order in small things brings a surprising amount of calm.',
+  "Nothing is really lost — it's just waiting for you to remember.",
+];
+
+// Deterministic string hash (djb2-ish) so the same person sees the same
+// quote all day, and a different one tomorrow, without storing anything.
+function hashString(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
+
 // Simple Levenshtein edit distance — used to catch near-duplicate typos
 // ("ofice" vs "office") without pulling in a library.
 function levenshtein(a, b) {
@@ -155,10 +209,11 @@ export default function Home() {
   const [handsFreeActive, setHandsFreeActive] = useState(false);
   const [voiceCaption, setVoiceCaption] = useState('');
   const [speechSupported, setSpeechSupported] = useState(false);
-  // Default to the more vibrant Sunset theme rather than the plainer Cream
-  // one — people can still switch to any of the four from the palette
-  // button, but the out-of-the-box look should feel lively, not dull.
-  const [themeName, setThemeName] = useState('sunset');
+  // Default to the vibrant-but-calm Ocean theme rather than the plainer
+  // Cream one (Sunset was tried first but users found the coral/orange too
+  // much) — people can still switch to any of the four from the palette
+  // button.
+  const [themeName, setThemeName] = useState('ocean');
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
   const [showHelp, setShowHelp] = useState(false);
@@ -199,6 +254,29 @@ export default function Home() {
     () => Array.from(new Set(items.map((i) => i.name))).sort((a, b) => a.localeCompare(b)),
     [items]
   );
+
+  // Live date/time for the "Today" panel — updated on a light interval
+  // rather than every second, since a wall clock doesn't need to be
+  // second-accurate here. Starts null (rather than `new Date()`) so the
+  // server-rendered markup and the first client render match exactly —
+  // the actual time is filled in a moment later, client-side only, in the
+  // effect below, avoiding a hydration mismatch on the clock text.
+  const [now, setNow] = useState(null);
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // One quote per person per (local) day — stable all day, different
+  // tomorrow, and different between people, without needing to store
+  // anything or call an external service.
+  const quoteOfDay = useMemo(() => {
+    if (!now) return QUOTES[0];
+    const dateKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    const seed = `${dateKey}|${userEmail || 'guest'}`;
+    return QUOTES[hashString(seed) % QUOTES.length];
+  }, [now, userEmail]);
 
   useEffect(() => {
     (async () => {
@@ -1064,6 +1142,59 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Today panel: date/time + a quote of the day, personal to this
+          person (see quoteOfDay above) */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        marginBottom: 22,
+        padding: '16px 20px',
+        background: 'var(--wdipi-surface)',
+        border: '1px solid var(--wdipi-border)',
+        borderRadius: 16,
+        boxShadow: cardShadow,
+        flexWrap: 'wrap',
+      }}>
+        <svg width="56" height="56" viewBox="0 0 64 64" aria-hidden="true" style={{ flexShrink: 0 }}>
+          <defs>
+            <linearGradient id="wdipi-today-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="var(--wdipi-accent)" />
+              <stop offset="100%" stopColor="var(--wdipi-highlight)" />
+            </linearGradient>
+          </defs>
+          <circle cx="32" cy="32" r="32" fill="url(#wdipi-today-grad)" opacity="0.18" />
+          <circle cx="32" cy="32" r="21" fill="url(#wdipi-today-grad)" opacity="0.35" />
+          <path
+            d="M32 15 L35.5 27.5 L48 31 L35.5 34.5 L32 47 L28.5 34.5 L16 31 L28.5 27.5 Z"
+            fill="var(--wdipi-accent)"
+          />
+        </svg>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <p style={{
+            margin: 0,
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: '0.02em',
+            textTransform: 'uppercase',
+            color: 'var(--wdipi-muted)',
+          }}>
+            {now
+              ? `${now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} · ${now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+              : ' '}
+          </p>
+          <p className="serif" style={{
+            margin: '6px 0 0',
+            fontSize: 18,
+            fontStyle: 'italic',
+            color: 'var(--wdipi-ink)',
+            lineHeight: 1.35,
+          }}>
+            &ldquo;{quoteOfDay}&rdquo;
+          </p>
+        </div>
+      </div>
 
       {showThemePicker && (
         <div style={{
