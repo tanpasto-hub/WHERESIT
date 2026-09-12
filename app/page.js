@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Search, Mic, MicOff, Plus, X, Check, Pencil, Trash2, Loader2, LogOut,
-  List, LayoutGrid, Palette, HelpCircle,
+  List, LayoutGrid, Palette, HelpCircle, DoorOpen, Brain, Lightbulb,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase-browser';
 
@@ -182,6 +182,36 @@ function findCloseMatch(value, candidates) {
   return best;
 }
 
+// Curated starter suggestions so a brand-new person (with no saved items
+// yet) still sees sensible options in the "What"/"Where" dropdowns, rather
+// than an empty list. Combined at render time with whatever rooms/items the
+// person has actually saved (see allRoomOptions/allItemOptions below) and,
+// for rooms, with any the person adds ahead of time via the room manager.
+const DEFAULT_ROOMS = [
+  'Living Room', 'Bedroom', 'Kitchen', 'Bathroom', 'Garage', 'Home Office',
+  'Dining Room', 'Hallway', 'Entryway', 'Closet', 'Basement', 'Attic',
+  'Laundry Room', "Kids' Room", 'Guest Room', 'Storage Room', 'Car',
+];
+const DEFAULT_ITEMS = [
+  'Keys', 'Wallet', 'Phone Charger', 'Remote Control', 'Glasses', 'Sunglasses',
+  'Passport', 'Umbrella', 'Headphones', 'Medication', 'Scissors', 'Tape Measure',
+  'Flashlight', 'Batteries', 'Stapler', 'USB Drive', 'Watch', 'Jewelry', 'Toolbox',
+  'First Aid Kit', 'Car Keys', 'Spare Keys', 'Mail', 'Checkbook', 'Backpack',
+  'Gym Bag', 'Charger Cable', 'Laptop', 'Tablet', 'Camera', 'Extra Cash', 'Tape',
+  'Hat', 'Gloves', 'Scarf', 'Water Bottle', 'Vitamins', 'Sewing Kit', 'Extension Cord',
+];
+
+// Simple Fisher-Yates shuffle — used to pick random quiz questions and to
+// scramble each question's multiple-choice answers.
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 export default function Home() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -217,6 +247,24 @@ export default function Home() {
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
   const [showHelp, setShowHelp] = useState(false);
+  // Rooms the person has proactively added (via the room manager panel)
+  // ahead of actually saving an item there — merged with DEFAULT_ROOMS and
+  // whatever rooms already show up in their saved items to build the full
+  // suggestion list. Persisted so the list survives reloads.
+  const [customRooms, setCustomRooms] = useState([]);
+  const [showRoomManager, setShowRoomManager] = useState(false);
+  const [newRoomInput, setNewRoomInput] = useState('');
+  // "Quiz yourself" — a light memory game once there are enough items saved
+  // to make it meaningful. quizQuestions is null until a round is started.
+  const [showQuiz, setShowQuiz] = useState(false);
+  const [quizQuestions, setQuizQuestions] = useState(null);
+  const [quizIndex, setQuizIndex] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizSelected, setQuizSelected] = useState(null);
+  const [quizAnswered, setQuizAnswered] = useState(false);
+  // A random saved item surfaced once per visit/login as a gentle memory
+  // nudge — see the sessionStorage-gated logic in the mount effect below.
+  const [reminderItem, setReminderItem] = useState(null);
   const recognitionRef = useRef(null);
   const handsFreeCancelRef = useRef(false);
   const itemsRef = useRef(items);
@@ -255,6 +303,28 @@ export default function Home() {
     [items]
   );
 
+  // Full suggestion lists for the "What"/"Where" dropdowns: curated
+  // defaults, plus anything the person has actually saved, plus (for
+  // rooms only) anything they've proactively added via the room manager.
+  // Deduped case-insensitively so "kitchen" typed once doesn't produce two
+  // near-identical entries.
+  const allRoomOptions = useMemo(() => {
+    const seen = new Map();
+    for (const r of [...DEFAULT_ROOMS, ...customRooms, ...distinctLocations]) {
+      const key = r.toLowerCase();
+      if (!seen.has(key)) seen.set(key, r);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [customRooms, distinctLocations]);
+  const allItemOptions = useMemo(() => {
+    const seen = new Map();
+    for (const n of [...DEFAULT_ITEMS, ...distinctNames]) {
+      const key = n.toLowerCase();
+      if (!seen.has(key)) seen.set(key, n);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [distinctNames]);
+
   // Live date/time for the "Today" panel — updated on a light interval
   // rather than every second, since a wall clock doesn't need to be
   // second-accurate here. Starts null (rather than `new Date()`) so the
@@ -282,7 +352,23 @@ export default function Home() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) setUserEmail(user.email);
-      await loadItems();
+      const loaded = await loadItems();
+
+      // Once per visit/login, gently remind the person where one random
+      // saved item is. sessionStorage (not localStorage) so it comes back
+      // each new visit rather than only the very first time ever, but
+      // doesn't nag again on every re-render within the same visit.
+      try {
+        const alreadyShown = typeof window !== 'undefined' && window.sessionStorage
+          ? window.sessionStorage.getItem('wdipi_reminder_shown') === '1'
+          : true;
+        if (!alreadyShown && loaded.length > 0) {
+          setReminderItem(loaded[Math.floor(Math.random() * loaded.length)]);
+          if (window.sessionStorage) window.sessionStorage.setItem('wdipi_reminder_shown', '1');
+        }
+      } catch {
+        // sessionStorage can throw in private browsing — just skip the reminder.
+      }
     })();
 
     const SR = typeof window !== 'undefined'
@@ -308,6 +394,11 @@ export default function Home() {
         if (savedTheme && THEMES[savedTheme]) setThemeName(savedTheme);
         const savedView = window.localStorage.getItem('wdipi_view');
         if (savedView === 'grid' || savedView === 'list') setViewMode(savedView);
+        const savedRooms = window.localStorage.getItem('wdipi_custom_rooms');
+        if (savedRooms) {
+          const parsed = JSON.parse(savedRooms);
+          if (Array.isArray(parsed)) setCustomRooms(parsed);
+        }
       }
     } catch {
       // localStorage can throw in private-browsing modes — safe to ignore, just use defaults.
@@ -357,6 +448,29 @@ export default function Home() {
     }
   }, [viewMode]);
 
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('wdipi_custom_rooms', JSON.stringify(customRooms));
+      }
+    } catch {
+      // ignore — private browsing etc.
+    }
+  }, [customRooms]);
+
+  // Reset the quiz whenever its panel is closed (by toggling it off, or by
+  // opening a different panel), so reopening it always starts fresh rather
+  // than resuming a half-finished or already-scored round.
+  useEffect(() => {
+    if (!showQuiz) {
+      setQuizQuestions(null);
+      setQuizIndex(0);
+      setQuizScore(0);
+      setQuizSelected(null);
+      setQuizAnswered(false);
+    }
+  }, [showQuiz]);
+
   const loadItems = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -365,6 +479,70 @@ export default function Home() {
       .order('updated_at', { ascending: false });
     if (!error && data) setItems(data);
     setLoading(false);
+    return !error && data ? data : [];
+  };
+
+  // Adds a room to the person's own list ahead of saving any item there
+  // (e.g. "Sunroom" before anything is actually stored in it). Rooms that
+  // already show up via a default or a saved item are simply ignored.
+  const addCustomRoom = () => {
+    const name = newRoomInput.trim();
+    if (!name) return;
+    const exists = allRoomOptions.some((r) => r.toLowerCase() === name.toLowerCase());
+    if (!exists) setCustomRooms((prev) => [...prev, name]);
+    setNewRoomInput('');
+  };
+  const removeCustomRoom = (name) => {
+    setCustomRooms((prev) => prev.filter((r) => r.toLowerCase() !== name.toLowerCase()));
+  };
+
+  // Builds a short multiple-choice round from the person's own saved items:
+  // "Where did you put your X?" with the real location plus a few
+  // plausible-but-wrong rooms as distractors.
+  const startQuiz = () => {
+    const pool = shuffleArray(items).slice(0, Math.min(8, items.length));
+    const questions = pool.map((item) => {
+      const otherLocations = distinctLocations.filter(
+        (l) => l.toLowerCase() !== item.location.toLowerCase()
+      );
+      const distractorPool = otherLocations.length >= 3
+        ? otherLocations
+        : Array.from(new Set([
+            ...otherLocations,
+            ...DEFAULT_ROOMS.filter((r) => r.toLowerCase() !== item.location.toLowerCase()),
+          ]));
+      const distractors = shuffleArray(distractorPool).slice(0, 3);
+      const choices = shuffleArray([item.location, ...distractors]);
+      return { itemName: item.name, correctAnswer: item.location, choices };
+    });
+    setQuizQuestions(questions);
+    setQuizIndex(0);
+    setQuizScore(0);
+    setQuizSelected(null);
+    setQuizAnswered(false);
+  };
+
+  const answerQuiz = (choice) => {
+    if (quizAnswered) return;
+    setQuizSelected(choice);
+    setQuizAnswered(true);
+    if (choice === quizQuestions[quizIndex].correctAnswer) {
+      setQuizScore((s) => s + 1);
+    }
+  };
+  const nextQuizQuestion = () => {
+    setQuizIndex((i) => i + 1);
+    setQuizSelected(null);
+    setQuizAnswered(false);
+  };
+
+  // Opens exactly one of the header panels at a time — clicking the button
+  // for whichever one is already open closes it instead.
+  const togglePanel = (name) => {
+    setShowHelp((prev) => (name === 'help' ? !prev : false));
+    setShowThemePicker((prev) => (name === 'theme' ? !prev : false));
+    setShowRoomManager((prev) => (name === 'rooms' ? !prev : false));
+    setShowQuiz((prev) => (name === 'quiz' ? !prev : false));
   };
 
   // Generic voice capture for any of the three text fields — search, the
@@ -1050,10 +1228,10 @@ export default function Home() {
     }}>
       {/* Shared suggestion lists for the "What"/"Where" inputs below. */}
       <datalist id="wdipi-name-list">
-        {distinctNames.map((n) => <option key={n} value={n} />)}
+        {allItemOptions.map((n) => <option key={n} value={n} />)}
       </datalist>
       <datalist id="wdipi-location-list">
-        {distinctLocations.map((l) => <option key={l} value={l} />)}
+        {allRoomOptions.map((l) => <option key={l} value={l} />)}
       </datalist>
 
       {/* Header */}
@@ -1089,9 +1267,9 @@ export default function Home() {
             </p>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <button
-            onClick={() => { setShowHelp((v) => !v); setShowThemePicker(false); }}
+            onClick={() => togglePanel('help')}
             title="How to use this app"
             aria-label="How to use this app"
             style={{
@@ -1107,7 +1285,7 @@ export default function Home() {
             <HelpCircle size={16} />
           </button>
           <button
-            onClick={() => { setShowThemePicker((v) => !v); setShowHelp(false); }}
+            onClick={() => togglePanel('theme')}
             title="Change background theme"
             aria-label="Change background theme"
             style={{
@@ -1121,6 +1299,38 @@ export default function Home() {
             }}
           >
             <Palette size={16} />
+          </button>
+          <button
+            onClick={() => togglePanel('rooms')}
+            title="Manage your rooms"
+            aria-label="Manage your rooms"
+            style={{
+              background: showRoomManager ? 'var(--wdipi-surface)' : 'rgba(255,255,255,0.16)',
+              color: showRoomManager ? 'var(--wdipi-accent)' : 'var(--wdipi-surface)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 999,
+              padding: '8px 9px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <DoorOpen size={16} />
+          </button>
+          <button
+            onClick={() => togglePanel('quiz')}
+            title="Quiz yourself"
+            aria-label="Quiz yourself"
+            style={{
+              background: showQuiz ? 'var(--wdipi-surface)' : 'rgba(255,255,255,0.16)',
+              color: showQuiz ? 'var(--wdipi-accent)' : 'var(--wdipi-surface)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 999,
+              padding: '8px 9px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <Brain size={16} />
           </button>
           <button
             onClick={signOut}
@@ -1142,6 +1352,34 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* A once-per-visit nudge about where one random saved item is —
+          see the sessionStorage-gated logic that sets reminderItem. */}
+      {reminderItem && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 16,
+          padding: '12px 16px',
+          background: 'var(--wdipi-caption-bg)',
+          border: '1px solid var(--wdipi-border)',
+          borderRadius: 12,
+        }}>
+          <Lightbulb size={18} color="var(--wdipi-accent)" style={{ flexShrink: 0 }} aria-hidden="true" />
+          <p style={{ margin: 0, flex: 1, fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.4 }}>
+            Quick reminder — your <strong>{reminderItem.name}</strong> is in{' '}
+            <span style={locationChipStyle}>{reminderItem.location}</span>.
+          </p>
+          <button
+            onClick={() => setReminderItem(null)}
+            aria-label="Dismiss reminder"
+            style={{ background: 'none', border: 'none', padding: 4, color: 'var(--wdipi-muted)', display: 'flex', flexShrink: 0 }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Today panel: date/time + a quote of the day, personal to this
           person (see quoteOfDay above) */}
@@ -1232,6 +1470,181 @@ export default function Home() {
         </div>
       )}
 
+      {showRoomManager && (
+        <div style={{
+          marginBottom: 20,
+          padding: '16px 18px',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
+          borderRadius: 8,
+        }}>
+          <p style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: 'var(--wdipi-ink)' }}>
+            Your rooms
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={newRoomInput}
+              onChange={(e) => setNewRoomInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustomRoom()}
+              placeholder="Add a room, e.g. Sunroom"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: '1px solid var(--wdipi-border)',
+                borderRadius: 999,
+                padding: '8px 14px',
+                fontSize: 13,
+                background: 'var(--wdipi-bg)',
+              }}
+            />
+            <button
+              onClick={addCustomRoom}
+              disabled={!newRoomInput.trim()}
+              style={{
+                ...pillButtonStyle,
+                padding: '8px 16px',
+                fontSize: 13,
+                opacity: newRoomInput.trim() ? 1 : 0.4,
+                cursor: newRoomInput.trim() ? 'pointer' : 'not-allowed',
+              }}
+            >
+              Add
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {allRoomOptions.map((r) => (
+              <span key={r} style={{ ...locationChipStyle, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {r}
+                {customRooms.some((c) => c.toLowerCase() === r.toLowerCase()) && (
+                  <button
+                    onClick={() => removeCustomRoom(r)}
+                    aria-label={`Remove ${r}`}
+                    style={{ background: 'none', border: 'none', padding: 0, display: 'flex', color: 'inherit', cursor: 'pointer' }}
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--wdipi-muted)', lineHeight: 1.4 }}>
+            These show up as suggestions when you add an item — you can always type a room
+            that&apos;s not listed here too, and it&apos;ll show up next time.
+          </p>
+        </div>
+      )}
+
+      {showQuiz && (
+        <div style={{
+          marginBottom: 20,
+          padding: '16px 18px',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
+          borderRadius: 8,
+        }}>
+          {items.length < 10 ? (
+            <>
+              <p style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 600, color: 'var(--wdipi-ink)' }}>
+                Quiz yourself
+              </p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+                Add a few more items to unlock this — you have {items.length} of the 10 needed
+                to start a quiz.
+              </p>
+            </>
+          ) : !quizQuestions ? (
+            <>
+              <p style={{ margin: '0 0 6px', fontSize: 14, fontWeight: 600, color: 'var(--wdipi-ink)' }}>
+                Quiz yourself
+              </p>
+              <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+                See how well you remember where everything is.
+              </p>
+              <button style={{ ...pillButtonStyle, padding: '9px 16px', fontSize: 13 }} onClick={startQuiz}>
+                Start quiz
+              </button>
+            </>
+          ) : quizIndex < quizQuestions.length ? (
+            <>
+              <p style={{
+                margin: '0 0 4px',
+                fontSize: 11,
+                color: 'var(--wdipi-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+              }}>
+                Question {quizIndex + 1} of {quizQuestions.length}
+              </p>
+              <p className="serif" style={{ margin: '0 0 14px', fontSize: 20, fontStyle: 'italic', color: 'var(--wdipi-ink)' }}>
+                Where did you put your {quizQuestions[quizIndex].itemName}?
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {quizQuestions[quizIndex].choices.map((choice) => {
+                  const isCorrect = choice === quizQuestions[quizIndex].correctAnswer;
+                  const isSelected = choice === quizSelected;
+                  let bg = 'var(--wdipi-bg)';
+                  let border = '1px solid var(--wdipi-border)';
+                  if (quizAnswered && isCorrect) { bg = 'var(--wdipi-caption-bg)'; border = '1px solid var(--wdipi-accent)'; }
+                  if (quizAnswered && isSelected && !isCorrect) { bg = 'var(--wdipi-error-bg)'; border = '1px solid var(--wdipi-error-text)'; }
+                  return (
+                    <button
+                      key={choice}
+                      onClick={() => answerQuiz(choice)}
+                      disabled={quizAnswered}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        textAlign: 'left',
+                        padding: '10px 14px',
+                        borderRadius: 10,
+                        background: bg,
+                        border,
+                        fontSize: 14,
+                        color: 'var(--wdipi-body)',
+                        cursor: quizAnswered ? 'default' : 'pointer',
+                      }}
+                    >
+                      {choice}
+                      {quizAnswered && isCorrect && <Check size={15} color="var(--wdipi-accent)" />}
+                      {quizAnswered && isSelected && !isCorrect && <X size={15} color="var(--wdipi-error-text)" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {quizAnswered && (
+                <button
+                  style={{ ...pillButtonStyle, padding: '9px 16px', fontSize: 13, marginTop: 14 }}
+                  onClick={nextQuizQuestion}
+                >
+                  {quizIndex + 1 < quizQuestions.length ? 'Next question' : 'See my score'}
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="serif" style={{ margin: '0 0 8px', fontSize: 24, fontStyle: 'italic', color: 'var(--wdipi-ink)' }}>
+                {quizScore} of {quizQuestions.length} right
+              </p>
+              <p style={{ margin: '0 0 14px', fontSize: 13, color: 'var(--wdipi-body)' }}>
+                {quizScore === quizQuestions.length
+                  ? 'Perfect memory — nicely done.'
+                  : 'Not bad — a quick look at your list will fix the rest.'}
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={{ ...pillButtonStyle, padding: '9px 16px', fontSize: 13 }} onClick={startQuiz}>
+                  Try again
+                </button>
+                <button style={confirmBtnGhostStyle} onClick={() => setShowQuiz(false)}>
+                  Close
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {showHelp && (
         <div style={{
           marginBottom: 20,
@@ -1263,6 +1676,13 @@ export default function Home() {
             above to change the color theme, or the{' '}
             <List size={12} style={{ verticalAlign: -1 }} />/<LayoutGrid size={12} style={{ verticalAlign: -1 }} />{' '}
             icons above your list to switch between a list and a grid of cards.
+          </p>
+          <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+            <strong>Rooms &amp; quiz:</strong> tap <DoorOpen size={12} style={{ verticalAlign: -1 }} />{' '}
+            to add rooms ahead of time so they show up as suggestions — you can still type any
+            room that&apos;s not listed. Once you&apos;ve saved 10 items, tap{' '}
+            <Brain size={12} style={{ verticalAlign: -1 }} /> to quiz yourself on what&apos;s
+            where.
           </p>
         </div>
       )}
