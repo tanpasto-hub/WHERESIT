@@ -1,5 +1,26 @@
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
 
+/* Default (Cream) theme tokens. The app overrides these on the root
+   element at runtime when the person picks a different theme — see the
+   THEMES object and the theme-applying effect in app/page.js. */
+:root {
+  --wdipi-bg: #F1EFE7;
+  --wdipi-ink: #1B1D1A;
+  --wdipi-surface: #FAF9F3;
+  --wdipi-border: #DDD8CA;
+  --wdipi-muted: #8C877A;
+  --wdipi-body: #4A4842;
+  --wdipi-text2: #3A3833;
+  --wdipi-accent: #2B4C7E;
+  --wdipi-accent-rgb: 43, 76, 126;
+  --wdipi-warn-bg: #F5EFDC;
+  --wdipi-warn-border: #D8C88A;
+  --wdipi-error-bg: #F5E3DC;
+  --wdipi-error-text: #8B2E1C;
+  --wdipi-caption-bg: #EDEAE0;
+  --wdipi-highlight: #F5E0A8;
+}
+
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
@@ -8,11 +29,12 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: #F1EFE7;
-  color: #1B1D1A;
+  background: var(--wdipi-bg);
+  color: var(--wdipi-ink);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
 }
 
 input, button, textarea {
@@ -21,7 +43,7 @@ input, button, textarea {
 }
 
 input:focus, textarea:focus {
-  outline: 2px solid #2B4C7E;
+  outline: 2px solid var(--wdipi-accent);
   outline-offset: 1px;
 }
 
@@ -39,9 +61,9 @@ button {
 }
 
 @keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(43, 76, 126, 0.5); }
-  70% { box-shadow: 0 0 0 10px rgba(43, 76, 126, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(43, 76, 126, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--wdipi-accent-rgb), 0.5); }
+  70% { box-shadow: 0 0 0 10px rgba(var(--wdipi-accent-rgb), 0); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--wdipi-accent-rgb), 0); }
 }
 
 .listening-pulse {
@@ -49,6 +71,6 @@ button {
 }
 
 .highlight {
-  background-image: linear-gradient(transparent 62%, #F5E0A8 62%, #F5E0A8 92%, transparent 92%);
+  background-image: linear-gradient(transparent 62%, var(--wdipi-highlight) 62%, var(--wdipi-highlight) 92%, transparent 92%);
   padding: 0 2px;
 }

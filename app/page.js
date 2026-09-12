@@ -4,8 +4,88 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Search, Mic, MicOff, Plus, X, Check, Pencil, Trash2, Loader2, LogOut,
+  List, LayoutGrid, Palette, HelpCircle,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase-browser';
+
+// Vibrant background/color themes the person can pick from. Each token is
+// referenced throughout the page as a CSS custom property (--wdipi-*) set
+// on the document root, rather than hardcoded, so switching themes doesn't
+// require touching every style object.
+const THEMES = {
+  cream: {
+    label: 'Cream',
+    bg: '#F1EFE7',
+    ink: '#1B1D1A',
+    surface: '#FAF9F3',
+    border: '#DDD8CA',
+    muted: '#8C877A',
+    body: '#4A4842',
+    text2: '#3A3833',
+    accent: '#2B4C7E',
+    accentRgb: '43,76,126',
+    warnBg: '#F5EFDC',
+    warnBorder: '#D8C88A',
+    errorBg: '#F5E3DC',
+    errorText: '#8B2E1C',
+    captionBg: '#EDEAE0',
+    highlight: '#F5E0A8',
+  },
+  ocean: {
+    label: 'Ocean',
+    bg: '#E3F2F5',
+    ink: '#0B2E3D',
+    surface: '#FFFFFF',
+    border: '#BFE1E8',
+    muted: '#5B8A94',
+    body: '#1F3A44',
+    text2: '#2D5F6B',
+    accent: '#0E7C86',
+    accentRgb: '14,124,134',
+    warnBg: '#FFF4D6',
+    warnBorder: '#F0C866',
+    errorBg: '#FDE4E1',
+    errorText: '#B23A2A',
+    captionBg: '#D9F0F2',
+    highlight: '#FFE29A',
+  },
+  sunset: {
+    label: 'Sunset',
+    bg: '#FFF0E8',
+    ink: '#4A1F1A',
+    surface: '#FFFDFB',
+    border: '#F5D0BE',
+    muted: '#B57A64',
+    body: '#5C3A2E',
+    text2: '#7A4331',
+    accent: '#E8552F',
+    accentRgb: '232,85,47',
+    warnBg: '#FFF3D6',
+    warnBorder: '#F0C25A',
+    errorBg: '#FBDCD6',
+    errorText: '#A32E1B',
+    captionBg: '#FCE3D2',
+    highlight: '#FFD6A8',
+  },
+  forest: {
+    label: 'Forest',
+    bg: '#EAF3E6',
+    ink: '#14291B',
+    surface: '#FBFDF8',
+    border: '#C9DFC1',
+    muted: '#6F9169',
+    body: '#26402A',
+    text2: '#33502E',
+    accent: '#2F8F4E',
+    accentRgb: '47,143,78',
+    warnBg: '#FBF3D2',
+    warnBorder: '#E3C25A',
+    errorBg: '#FADDD5',
+    errorText: '#A33420',
+    captionBg: '#DCEBD4',
+    highlight: '#F0E29A',
+  },
+};
 
 // Simple Levenshtein edit distance — used to catch near-duplicate typos
 // ("ofice" vs "office") without pulling in a library.
@@ -75,6 +155,10 @@ export default function Home() {
   const [handsFreeActive, setHandsFreeActive] = useState(false);
   const [voiceCaption, setVoiceCaption] = useState('');
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [themeName, setThemeName] = useState('cream');
+  const [showThemePicker, setShowThemePicker] = useState(false);
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
+  const [showHelp, setShowHelp] = useState(false);
   const recognitionRef = useRef(null);
   const handsFreeCancelRef = useRef(false);
   const itemsRef = useRef(items);
@@ -135,8 +219,62 @@ export default function Home() {
       // gesture that triggered it.
       pickUSVoice();
     }
+
+    // Pick up any saved theme/layout choice from a previous visit.
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const savedTheme = window.localStorage.getItem('wdipi_theme');
+        if (savedTheme && THEMES[savedTheme]) setThemeName(savedTheme);
+        const savedView = window.localStorage.getItem('wdipi_view');
+        if (savedView === 'grid' || savedView === 'list') setViewMode(savedView);
+      }
+    } catch {
+      // localStorage can throw in private-browsing modes — safe to ignore, just use defaults.
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Apply the selected theme as CSS custom properties on the document root
+  // (rather than only in component state) so globals.css and every inline
+  // style referencing var(--wdipi-*) picks it up immediately, and persist
+  // the choice for next time.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const t = THEMES[themeName] || THEMES.cream;
+    const root = document.documentElement.style;
+    root.setProperty('--wdipi-bg', t.bg);
+    root.setProperty('--wdipi-ink', t.ink);
+    root.setProperty('--wdipi-surface', t.surface);
+    root.setProperty('--wdipi-border', t.border);
+    root.setProperty('--wdipi-muted', t.muted);
+    root.setProperty('--wdipi-body', t.body);
+    root.setProperty('--wdipi-text2', t.text2);
+    root.setProperty('--wdipi-accent', t.accent);
+    root.setProperty('--wdipi-accent-rgb', t.accentRgb);
+    root.setProperty('--wdipi-warn-bg', t.warnBg);
+    root.setProperty('--wdipi-warn-border', t.warnBorder);
+    root.setProperty('--wdipi-error-bg', t.errorBg);
+    root.setProperty('--wdipi-error-text', t.errorText);
+    root.setProperty('--wdipi-caption-bg', t.captionBg);
+    root.setProperty('--wdipi-highlight', t.highlight);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', t.bg);
+    try {
+      if (window.localStorage) window.localStorage.setItem('wdipi_theme', themeName);
+    } catch {
+      // ignore — private browsing etc.
+    }
+  }, [themeName]);
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('wdipi_view', viewMode);
+      }
+    } catch {
+      // ignore — private browsing etc.
+    }
+  }, [viewMode]);
 
   const loadItems = async () => {
     setLoading(true);
@@ -770,15 +908,15 @@ export default function Home() {
   };
 
   const confirmBoxStyle = {
-    background: '#F5EFDC',
-    border: '1px solid #D8C88A',
+    background: 'var(--wdipi-warn-bg)',
+    border: '1px solid var(--wdipi-warn-border)',
     borderRadius: 6,
     padding: '12px 14px',
     marginBottom: 14,
   };
   const confirmBtnStyle = {
-    background: '#1B1D1A',
-    color: '#FAF9F3',
+    background: 'var(--wdipi-ink)',
+    color: 'var(--wdipi-surface)',
     border: 'none',
     borderRadius: 5,
     padding: '7px 12px',
@@ -787,18 +925,18 @@ export default function Home() {
   };
   const confirmBtnGhostStyle = {
     background: 'transparent',
-    color: '#4A4842',
-    border: '1px solid #DDD8CA',
+    color: 'var(--wdipi-body)',
+    border: '1px solid var(--wdipi-border)',
     borderRadius: 5,
     padding: '7px 12px',
     fontSize: 13,
   };
   const errorBoxStyle = {
     fontSize: 13,
-    color: '#8B2E1C',
+    color: 'var(--wdipi-error-text)',
     marginBottom: 14,
     padding: '10px 12px',
-    background: '#F5E3DC',
+    background: 'var(--wdipi-error-bg)',
     borderRadius: 6,
   };
 
@@ -834,48 +972,152 @@ export default function Home() {
           }}>
             Where&apos;d I<br />put it
           </h1>
-          <p style={{ fontSize: 14, color: '#4A4842', margin: '10px 0 0', lineHeight: 1.4, maxWidth: 340 }}>
+          <p style={{ fontSize: 14, color: 'var(--wdipi-body)', margin: '10px 0 0', lineHeight: 1.4, maxWidth: 340 }}>
             Save what you own and where it is. Then find it later — by typing or by talking.
           </p>
           {userEmail && (
-            <p style={{ fontSize: 12, color: '#8C877A', margin: '4px 0 0' }}>
+            <p style={{ fontSize: 12, color: 'var(--wdipi-muted)', margin: '4px 0 0' }}>
               Signed in as {userEmail}
             </p>
           )}
         </div>
-        <button
-          onClick={signOut}
-          title="Sign out"
-          aria-label="Sign out"
-          style={{
-            background: 'transparent',
-            border: '1px solid #DDD8CA',
-            borderRadius: 6,
-            padding: '8px 10px',
-            color: '#4A4842',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 12,
-            flexShrink: 0,
-          }}
-        >
-          <LogOut size={14} /> Sign out
-        </button>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button
+            onClick={() => { setShowHelp((v) => !v); setShowThemePicker(false); }}
+            title="How to use this app"
+            aria-label="How to use this app"
+            style={{
+              background: showHelp ? 'var(--wdipi-ink)' : 'transparent',
+              color: showHelp ? 'var(--wdipi-surface)' : 'var(--wdipi-body)',
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 6,
+              padding: '8px 9px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <HelpCircle size={16} />
+          </button>
+          <button
+            onClick={() => { setShowThemePicker((v) => !v); setShowHelp(false); }}
+            title="Change background theme"
+            aria-label="Change background theme"
+            style={{
+              background: showThemePicker ? 'var(--wdipi-ink)' : 'transparent',
+              color: showThemePicker ? 'var(--wdipi-surface)' : 'var(--wdipi-body)',
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 6,
+              padding: '8px 9px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <Palette size={16} />
+          </button>
+          <button
+            onClick={signOut}
+            title="Sign out"
+            aria-label="Sign out"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 6,
+              padding: '8px 10px',
+              color: 'var(--wdipi-body)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+            }}
+          >
+            <LogOut size={14} /> Sign out
+          </button>
+        </div>
       </header>
+
+      {showThemePicker && (
+        <div style={{
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          marginBottom: 20,
+          padding: '12px 14px',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
+          borderRadius: 8,
+        }}>
+          <span style={{ fontSize: 12, color: 'var(--wdipi-muted)' }}>Theme:</span>
+          {Object.entries(THEMES).map(([key, t]) => (
+            <button
+              key={key}
+              onClick={() => setThemeName(key)}
+              title={t.label}
+              aria-label={`${t.label} theme`}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                border: themeName === key ? '2px solid var(--wdipi-ink)' : '1px solid var(--wdipi-border)',
+                background: `linear-gradient(135deg, ${t.bg} 50%, ${t.accent} 50%)`,
+                padding: 0,
+                flexShrink: 0,
+              }}
+            />
+          ))}
+          <span style={{ fontSize: 12, color: 'var(--wdipi-muted)', marginLeft: 4 }}>
+            {THEMES[themeName]?.label}
+          </span>
+        </div>
+      )}
+
+      {showHelp && (
+        <div style={{
+          marginBottom: 20,
+          padding: '16px 18px',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
+          borderRadius: 8,
+        }}>
+          <p style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600, color: 'var(--wdipi-ink)' }}>
+            How to use this app
+          </p>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+            <strong>Adding things:</strong> tap &ldquo;+ Add item&rdquo;, then either type both
+            boxes, or tap the mic on &ldquo;What is it?&rdquo; and just say it all at once —
+            &ldquo;chair, office room&rdquo;. It&apos;ll keep asking for the next item automatically;
+            say &ldquo;done&rdquo; whenever you&apos;re finished.
+          </p>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+            <strong>Finding things:</strong> type what you&apos;re looking for in the search box at
+            the top, or tap its mic and ask out loud — it understands typos, plurals, and
+            nicknames (like &ldquo;specs&rdquo; for glasses).
+          </p>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+            <strong>Fixing things:</strong> tap Edit on any item to update where it is, or Delete
+            to remove it.
+          </p>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--wdipi-body)', lineHeight: 1.5 }}>
+            <strong>Making it yours:</strong> tap <Palette size={12} style={{ verticalAlign: -1 }} />{' '}
+            above to change the color theme, or the{' '}
+            <List size={12} style={{ verticalAlign: -1 }} />/<LayoutGrid size={12} style={{ verticalAlign: -1 }} />{' '}
+            icons above your list to switch between a list and a grid of cards.
+          </p>
+        </div>
+      )}
 
       {/* Search bar */}
       <div style={{ marginBottom: 18 }}>
         <div style={{
           display: 'flex',
           gap: 6,
-          background: '#FAF9F3',
-          border: '1px solid #DDD8CA',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
           borderRadius: 10,
           padding: '4px 4px 4px 14px',
           alignItems: 'center',
         }}>
-          <Search size={16} color="#8C877A" style={{ flexShrink: 0 }} />
+          <Search size={16} color="var(--wdipi-muted)" style={{ flexShrink: 0 }} />
           <input
             type="text"
             placeholder="What are you looking for?"
@@ -899,7 +1141,7 @@ export default function Home() {
                 background: 'none',
                 border: 'none',
                 padding: 6,
-                color: '#8C877A',
+                color: 'var(--wdipi-muted)',
               }}
             >
               <X size={16} />
@@ -911,8 +1153,8 @@ export default function Home() {
               className={listeningField === 'search' ? 'listening-pulse' : ''}
               aria-label={listeningField === 'search' ? 'Stop listening' : 'Voice search'}
               style={{
-                background: listeningField === 'search' ? '#2B4C7E' : '#1B1D1A',
-                color: '#FAF9F3',
+                background: listeningField === 'search' ? 'var(--wdipi-accent)' : 'var(--wdipi-ink)',
+                color: 'var(--wdipi-surface)',
                 border: 'none',
                 borderRadius: 7,
                 padding: '10px 12px',
@@ -926,14 +1168,14 @@ export default function Home() {
           )}
         </div>
         {!voiceSupported && (
-          <p style={{ fontSize: 11, color: '#8C877A', margin: '6px 0 0' }}>
+          <p style={{ fontSize: 11, color: 'var(--wdipi-muted)', margin: '6px 0 0' }}>
             Voice search needs Chrome, Edge, or Safari
           </p>
         )}
         {listeningField === 'search' && (
           <p style={{
             fontSize: 13,
-            color: '#2B4C7E',
+            color: 'var(--wdipi-accent)',
             fontStyle: 'italic',
             margin: '8px 0 0',
           }}>
@@ -945,15 +1187,15 @@ export default function Home() {
       {/* Search result */}
       {(isSearching || searchResult) && (
         <div style={{
-          background: '#FAF9F3',
-          border: '1px solid #DDD8CA',
-          borderLeft: '3px solid #2B4C7E',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
+          borderLeft: '3px solid var(--wdipi-accent)',
           borderRadius: 4,
           padding: '14px 16px',
           marginBottom: 22,
         }}>
           {isSearching ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#8C877A' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--wdipi-muted)' }}>
               <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
               <span style={{ fontSize: 14 }}>Looking through your things...</span>
             </div>
@@ -962,7 +1204,7 @@ export default function Home() {
               <p style={{
                 margin: 0,
                 fontSize: 14,
-                color: '#4A4842',
+                color: 'var(--wdipi-body)',
                 marginBottom: searchResult.matches?.length ? 12 : 0,
               }}>
                 {searchResult.message}
@@ -971,7 +1213,7 @@ export default function Home() {
                 <div key={idx} style={{
                   marginTop: idx > 0 ? 12 : 0,
                   paddingTop: idx > 0 ? 12 : 0,
-                  borderTop: idx > 0 ? '1px dashed #DDD8CA' : 'none',
+                  borderTop: idx > 0 ? '1px dashed var(--wdipi-border)' : 'none',
                 }}>
                   <div className="serif" style={{
                     fontSize: 22,
@@ -980,13 +1222,13 @@ export default function Home() {
                   }}>
                     {m.name}
                   </div>
-                  <div style={{ fontSize: 15, marginTop: 6, color: '#3A3833' }}>
+                  <div style={{ fontSize: 15, marginTop: 6, color: 'var(--wdipi-text2)' }}>
                     <span className="highlight">{m.location}</span>
                   </div>
                   {m.confidence === 'low' && (
                     <div style={{
                       fontSize: 11,
-                      color: '#8C877A',
+                      color: 'var(--wdipi-muted)',
                       marginTop: 4,
                       fontStyle: 'italic',
                     }}>
@@ -1007,9 +1249,9 @@ export default function Home() {
         justifyContent: 'space-between',
         marginBottom: 16,
         paddingBottom: 10,
-        borderBottom: '1px solid #DDD8CA',
+        borderBottom: '1px solid var(--wdipi-border)',
       }}>
-        <span style={{ fontSize: 12, color: '#8C877A' }}>
+        <span style={{ fontSize: 12, color: 'var(--wdipi-muted)' }}>
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </span>
         <button
@@ -1025,9 +1267,9 @@ export default function Home() {
             }
           }}
           style={{
-            background: showAdd ? 'transparent' : '#1B1D1A',
-            color: showAdd ? '#4A4842' : '#FAF9F3',
-            border: showAdd ? '1px solid #DDD8CA' : 'none',
+            background: showAdd ? 'transparent' : 'var(--wdipi-ink)',
+            color: showAdd ? 'var(--wdipi-body)' : 'var(--wdipi-surface)',
+            border: showAdd ? '1px solid var(--wdipi-border)' : 'none',
             borderRadius: 6,
             padding: '9px 16px',
             fontSize: 14,
@@ -1044,8 +1286,8 @@ export default function Home() {
       {/* Add form */}
       {showAdd && (
         <div style={{
-          background: '#FAF9F3',
-          border: '1px solid #DDD8CA',
+          background: 'var(--wdipi-surface)',
+          border: '1px solid var(--wdipi-border)',
           borderRadius: 8,
           padding: 16,
           marginBottom: 22,
@@ -1058,13 +1300,13 @@ export default function Home() {
               gap: 10,
               marginBottom: 14,
               padding: '10px 12px',
-              background: '#EDEAE0',
+              background: 'var(--wdipi-caption-bg)',
               borderRadius: 6,
             }}>
               <p style={{
                 margin: 0,
                 fontSize: 13,
-                color: '#2B4C7E',
+                color: 'var(--wdipi-accent)',
                 fontStyle: 'italic',
                 flex: 1,
               }}>
@@ -1074,11 +1316,11 @@ export default function Home() {
                 onClick={stopHandsFree}
                 style={{
                   background: 'transparent',
-                  border: '1px solid #DDD8CA',
+                  border: '1px solid var(--wdipi-border)',
                   borderRadius: 4,
                   padding: '4px 8px',
                   fontSize: 11,
-                  color: '#4A4842',
+                  color: 'var(--wdipi-body)',
                   flexShrink: 0,
                 }}
               >
@@ -1087,7 +1329,7 @@ export default function Home() {
             </div>
           )}
           {!handsFreeActive && (
-            <p style={{ fontSize: 12, color: '#8C877A', margin: '0 0 12px', lineHeight: 1.4 }}>
+            <p style={{ fontSize: 12, color: 'var(--wdipi-muted)', margin: '0 0 12px', lineHeight: 1.4 }}>
               Type both boxes, or tap <Mic size={11} style={{ verticalAlign: -1 }} /> on the first
               one and just say it all at once — &ldquo;chair, office room&rdquo; — then keep
               going, one item after another, and say &ldquo;done&rdquo; when you&apos;re finished.
@@ -1097,7 +1339,7 @@ export default function Home() {
             display: 'flex',
             alignItems: 'center',
             gap: 4,
-            borderBottom: '1px solid #DDD8CA',
+            borderBottom: '1px solid var(--wdipi-border)',
             marginBottom: 10,
           }}>
             <input
@@ -1124,8 +1366,8 @@ export default function Home() {
                 aria-label="Add the whole item by voice"
                 title="Add the whole item by voice"
                 style={{
-                  background: '#1B1D1A',
-                  color: '#FAF9F3',
+                  background: 'var(--wdipi-ink)',
+                  color: 'var(--wdipi-surface)',
                   border: 'none',
                   borderRadius: 6,
                   padding: 7,
@@ -1167,8 +1409,8 @@ export default function Home() {
                 className={listeningField === 'location' ? 'listening-pulse' : ''}
                 aria-label={listeningField === 'location' ? 'Stop listening' : 'Say where you put it'}
                 style={{
-                  background: listeningField === 'location' ? '#2B4C7E' : 'transparent',
-                  color: listeningField === 'location' ? '#FAF9F3' : '#8C877A',
+                  background: listeningField === 'location' ? 'var(--wdipi-accent)' : 'transparent',
+                  color: listeningField === 'location' ? 'var(--wdipi-surface)' : 'var(--wdipi-muted)',
                   border: 'none',
                   borderRadius: 6,
                   padding: 7,
@@ -1185,7 +1427,7 @@ export default function Home() {
           {!handsFreeActive && (listeningField === 'name' || listeningField === 'location') && (
             <p style={{
               fontSize: 12,
-              color: '#2B4C7E',
+              color: 'var(--wdipi-accent)',
               fontStyle: 'italic',
               margin: '0 0 14px',
             }}>
@@ -1197,7 +1439,7 @@ export default function Home() {
 
           {!handsFreeActive && (pendingDuplicate ? (
             <div style={confirmBoxStyle}>
-              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: 'var(--wdipi-body)' }}>
                 You already have <strong>&ldquo;{pendingDuplicate.name}&rdquo;</strong> saved in{' '}
                 <strong>&ldquo;{pendingDuplicate.existingItem.location}&rdquo;</strong>. Overwrite it with{' '}
                 <strong>&ldquo;{pendingDuplicate.location}&rdquo;</strong>?
@@ -1213,7 +1455,7 @@ export default function Home() {
             </div>
           ) : pendingConfirm ? (
             <div style={confirmBoxStyle}>
-              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#4A4842' }}>
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: 'var(--wdipi-body)' }}>
                 You already have <strong>&ldquo;{pendingConfirm.suggestion}&rdquo;</strong> saved.
                 Did you mean that instead of &ldquo;{pendingConfirm.typed}&rdquo;?
               </p>
@@ -1231,8 +1473,8 @@ export default function Home() {
               onClick={addItem}
               disabled={!newName.trim() || !newLocation.trim()}
               style={{
-                background: '#1B1D1A',
-                color: '#FAF9F3',
+                background: 'var(--wdipi-ink)',
+                color: 'var(--wdipi-surface)',
                 border: 'none',
                 borderRadius: 6,
                 padding: '10px 18px',
@@ -1249,17 +1491,53 @@ export default function Home() {
       )}
 
       {/* Items list */}
+      {!loading && items.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 10 }}>
+          <button
+            onClick={() => setViewMode('list')}
+            aria-label="List view"
+            title="List view"
+            style={{
+              background: viewMode === 'list' ? 'var(--wdipi-ink)' : 'transparent',
+              color: viewMode === 'list' ? 'var(--wdipi-surface)' : 'var(--wdipi-muted)',
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 4,
+              padding: '5px 8px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <List size={14} />
+          </button>
+          <button
+            onClick={() => setViewMode('grid')}
+            aria-label="Grid view"
+            title="Grid view"
+            style={{
+              background: viewMode === 'grid' ? 'var(--wdipi-ink)' : 'transparent',
+              color: viewMode === 'grid' ? 'var(--wdipi-surface)' : 'var(--wdipi-muted)',
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 4,
+              padding: '5px 8px',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <LayoutGrid size={14} />
+          </button>
+        </div>
+      )}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 40, color: '#8C877A' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: 'var(--wdipi-muted)' }}>
           <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
         </div>
       ) : items.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px 20px', color: '#8C877A' }}>
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--wdipi-muted)' }}>
           <p className="serif" style={{
             fontSize: 26,
             fontStyle: 'italic',
             margin: 0,
-            color: '#4A4842',
+            color: 'var(--wdipi-body)',
           }}>
             Nothing here yet.
           </p>
@@ -1270,8 +1548,8 @@ export default function Home() {
             <button
               onClick={() => setShowAdd(true)}
               style={{
-                background: '#1B1D1A',
-                color: '#FAF9F3',
+                background: 'var(--wdipi-ink)',
+                color: 'var(--wdipi-surface)',
                 border: 'none',
                 borderRadius: 6,
                 padding: '10px 20px',
@@ -1287,11 +1565,20 @@ export default function Home() {
           )}
         </div>
       ) : (
-        <div>
+        <div style={viewMode === 'grid' ? {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+          gap: 12,
+        } : undefined}>
           {items.map((item, idx) => (
-            <div key={item.id} style={{
+            <div key={item.id} style={viewMode === 'grid' ? {
+              padding: 14,
+              border: '1px solid var(--wdipi-border)',
+              borderRadius: 10,
+              background: 'var(--wdipi-surface)',
+            } : {
               padding: '16px 0',
-              borderBottom: idx < items.length - 1 ? '1px solid #DDD8CA' : 'none',
+              borderBottom: idx < items.length - 1 ? '1px solid var(--wdipi-border)' : 'none',
             }}>
               <div style={{
                 display: 'flex',
@@ -1320,8 +1607,8 @@ export default function Home() {
                         autoFocus
                         style={{
                           width: '100%',
-                          border: '1px solid #2B4C7E',
-                          background: '#FAF9F3',
+                          border: '1px solid var(--wdipi-accent)',
+                          background: 'var(--wdipi-surface)',
                           fontSize: 15,
                           padding: '8px 10px',
                           borderRadius: 4,
@@ -1332,7 +1619,7 @@ export default function Home() {
 
                       {editPendingConfirm ? (
                         <div style={{ ...confirmBoxStyle, marginTop: 8, marginBottom: 0 }}>
-                          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#4A4842' }}>
+                          <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--wdipi-body)' }}>
                             You already have <strong>&ldquo;{editPendingConfirm.suggestion}&rdquo;</strong> saved.
                             Did you mean that instead of &ldquo;{editPendingConfirm.typed}&rdquo;?
                           </p>
@@ -1350,8 +1637,8 @@ export default function Home() {
                           <button
                             onClick={() => saveEdit(item.id)}
                             style={{
-                              background: '#2B4C7E',
-                              color: '#FAF9F3',
+                              background: 'var(--wdipi-accent)',
+                              color: 'var(--wdipi-surface)',
                               border: 'none',
                               borderRadius: 4,
                               padding: '6px 12px',
@@ -1372,8 +1659,8 @@ export default function Home() {
                             }}
                             style={{
                               background: 'transparent',
-                              color: '#8C877A',
-                              border: '1px solid #DDD8CA',
+                              color: 'var(--wdipi-muted)',
+                              border: '1px solid var(--wdipi-border)',
                               borderRadius: 4,
                               padding: '6px 12px',
                               fontSize: 13,
@@ -1389,12 +1676,12 @@ export default function Home() {
                       <div style={{
                         fontSize: 15,
                         marginTop: 6,
-                        color: '#3A3833',
+                        color: 'var(--wdipi-text2)',
                         wordBreak: 'break-word',
                       }}>
                         <span className="highlight">{item.location}</span>
                       </div>
-                      <div style={{ fontSize: 11, color: '#8C877A', marginTop: 6 }}>
+                      <div style={{ fontSize: 11, color: 'var(--wdipi-muted)', marginTop: 6 }}>
                         updated {timeAgo(item.updated_at)}
                       </div>
                     </>
@@ -1409,10 +1696,10 @@ export default function Home() {
                       aria-label="Update location"
                       style={{
                         background: 'transparent',
-                        border: '1px solid #DDD8CA',
+                        border: '1px solid var(--wdipi-border)',
                         borderRadius: 4,
                         padding: '7px 10px',
-                        color: '#4A4842',
+                        color: 'var(--wdipi-body)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 5,
@@ -1429,10 +1716,10 @@ export default function Home() {
                       aria-label="Delete"
                       style={{
                         background: 'transparent',
-                        border: '1px solid #DDD8CA',
+                        border: '1px solid var(--wdipi-border)',
                         borderRadius: 4,
                         padding: '7px 10px',
-                        color: '#8C877A',
+                        color: 'var(--wdipi-muted)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 5,
