@@ -90,6 +90,12 @@ export default function Home() {
       ? window.localStorage.getItem('wdipi_mic_unlocked') === '1'
       : false
   );
+  // Diagnostic only: the raw reason the most recent listenFor() attempt
+  // came back empty (a SpeechRecognition error code like 'not-allowed' or
+  // 'no-speech', or 'unsupported'/'ended-without-speech'). Surfaced on
+  // screen when hands-free add fails to catch anything, so we can actually
+  // see why instead of guessing blind.
+  const lastListenErrorRef = useRef(null);
   const router = useRouter();
   const supabase = createClient();
 
@@ -262,6 +268,7 @@ export default function Home() {
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
     if (!SR) {
+      lastListenErrorRef.current = 'unsupported';
       resolve('');
       return;
     }
@@ -271,11 +278,19 @@ export default function Home() {
     recognition.interimResults = false;
     recognitionRef.current = recognition;
     setListeningField(label);
+    lastListenErrorRef.current = null;
 
     const startedAt = Date.now();
     let settled = false;
-    const finish = (value) => {
+    const finish = (value, errorCode) => {
       if (settled) return;
+      if (errorCode !== undefined) {
+        lastListenErrorRef.current = errorCode;
+      } else if (!value && !lastListenErrorRef.current) {
+        // Recognition ended with nothing to show and no explicit error —
+        // most likely it just didn't hear speech in time.
+        lastListenErrorRef.current = 'ended-without-speech';
+      }
       if (!value && attempt === 1 && !handsFreeCancelRef.current && Date.now() - startedAt < 700) {
         settled = true;
         resolve(listenFor(label, 2));
@@ -298,8 +313,13 @@ export default function Home() {
         // localStorage can throw in private-browsing modes — not worth failing over.
       }
     };
-    recognition.onresult = (event) => finish(event.results[0][0].transcript.trim());
-    recognition.onerror = () => finish('');
+    recognition.onresult = (event) => finish(event.results[0][0].transcript.trim(), null);
+    // Web Speech API's error codes include: 'not-allowed' (mic permission
+    // blocked), 'no-speech' (nothing heard before the browser's own
+    // timeout), 'audio-capture' (no working microphone found), 'aborted',
+    // 'network', 'service-not-allowed'. Captured here so a failure can
+    // actually be diagnosed instead of just looking like silence.
+    recognition.onerror = (event) => finish('', (event && event.error) || 'unknown-error');
     recognition.onend = () => finish('');
     try {
       recognition.start();
@@ -382,9 +402,15 @@ export default function Home() {
         if (cancelled()) return;
 
         if (!heard) {
+          // Surface exactly why the mic came back empty — both on screen
+          // and out loud — so a real failure (permission blocked, no mic
+          // found, etc.) is visible instead of looking identical to plain
+          // silence.
+          const diag = lastListenErrorRef.current;
+          if (savedCount === 0 && diag) setAddError(`Mic stopped: ${diag}`);
           await speak(savedCount > 0
             ? `Okay, done — I added ${savedCount} ${savedCount === 1 ? 'item' : 'items'}.`
-            : "I didn't catch that. Let's try again whenever you're ready.");
+            : `I didn't catch that${diag ? `. Microphone said: ${diag}` : ''}. Let's try again whenever you're ready.`);
           return;
         }
         if (soundsLikeDone(heard)) {
