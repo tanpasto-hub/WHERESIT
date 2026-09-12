@@ -1,24 +1,26 @@
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
 
-/* Default (Cream) theme tokens. The app overrides these on the root
+/* Default (Sunset) theme tokens — matches the app's default themeName so
+   the server-rendered first paint doesn't flash a different theme before
+   React's theme-applying effect runs. The app overrides these on the root
    element at runtime when the person picks a different theme — see the
-   THEMES object and the theme-applying effect in app/page.js. */
+   THEMES object and that effect in app/page.js. */
 :root {
-  --wdipi-bg: #F1EFE7;
-  --wdipi-ink: #1B1D1A;
-  --wdipi-surface: #FAF9F3;
-  --wdipi-border: #DDD8CA;
-  --wdipi-muted: #8C877A;
-  --wdipi-body: #4A4842;
-  --wdipi-text2: #3A3833;
-  --wdipi-accent: #2B4C7E;
-  --wdipi-accent-rgb: 43, 76, 126;
-  --wdipi-warn-bg: #F5EFDC;
-  --wdipi-warn-border: #D8C88A;
-  --wdipi-error-bg: #F5E3DC;
-  --wdipi-error-text: #8B2E1C;
-  --wdipi-caption-bg: #EDEAE0;
-  --wdipi-highlight: #F5E0A8;
+  --wdipi-bg: #FFF0E8;
+  --wdipi-ink: #4A1F1A;
+  --wdipi-surface: #FFFDFB;
+  --wdipi-border: #F5D0BE;
+  --wdipi-muted: #B57A64;
+  --wdipi-body: #5C3A2E;
+  --wdipi-text2: #7A4331;
+  --wdipi-accent: #E8552F;
+  --wdipi-accent-rgb: 232, 85, 47;
+  --wdipi-warn-bg: #FFF3D6;
+  --wdipi-warn-border: #F0C25A;
+  --wdipi-error-bg: #FBDCD6;
+  --wdipi-error-text: #A32E1B;
+  --wdipi-caption-bg: #FCE3D2;
+  --wdipi-highlight: #FFD6A8;
 }
 
 * {

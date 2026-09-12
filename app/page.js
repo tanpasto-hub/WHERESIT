@@ -155,7 +155,10 @@ export default function Home() {
   const [handsFreeActive, setHandsFreeActive] = useState(false);
   const [voiceCaption, setVoiceCaption] = useState('');
   const [speechSupported, setSpeechSupported] = useState(false);
-  const [themeName, setThemeName] = useState('cream');
+  // Default to the more vibrant Sunset theme rather than the plainer Cream
+  // one — people can still switch to any of the four from the palette
+  // button, but the out-of-the-box look should feel lively, not dull.
+  const [themeName, setThemeName] = useState('sunset');
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'grid'
   const [showHelp, setShowHelp] = useState(false);
@@ -915,11 +918,11 @@ export default function Home() {
     marginBottom: 14,
   };
   const confirmBtnStyle = {
-    background: 'var(--wdipi-ink)',
+    background: 'var(--wdipi-accent)',
     color: 'var(--wdipi-surface)',
     border: 'none',
-    borderRadius: 5,
-    padding: '7px 12px',
+    borderRadius: 999,
+    padding: '7px 14px',
     fontSize: 13,
     fontWeight: 500,
   };
@@ -939,6 +942,26 @@ export default function Home() {
     background: 'var(--wdipi-error-bg)',
     borderRadius: 6,
   };
+  // Shared "vibrant" building blocks: a colorful pill button with a
+  // theme-tinted glow (instead of a flat solid color), and a small rounded
+  // chip for location text (instead of a plain underline highlight).
+  const pillButtonStyle = {
+    background: 'var(--wdipi-accent)',
+    color: 'var(--wdipi-surface)',
+    border: 'none',
+    borderRadius: 999,
+    fontWeight: 600,
+    boxShadow: '0 4px 14px rgba(var(--wdipi-accent-rgb), 0.32)',
+  };
+  const locationChipStyle = {
+    display: 'inline-block',
+    background: 'rgba(var(--wdipi-accent-rgb), 0.12)',
+    color: 'var(--wdipi-accent)',
+    padding: '3px 11px',
+    borderRadius: 999,
+    fontWeight: 500,
+  };
+  const cardShadow = '0 2px 10px rgba(var(--wdipi-accent-rgb), 0.08), 0 1px 3px rgba(0,0,0,0.04)';
 
   return (
     <div style={{
@@ -961,6 +984,12 @@ export default function Home() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
+        flexWrap: 'wrap',
+        gap: 14,
+        background: 'linear-gradient(135deg, var(--wdipi-accent), rgba(var(--wdipi-accent-rgb), 0.78))',
+        borderRadius: 20,
+        padding: '28px 24px',
+        boxShadow: '0 10px 28px rgba(var(--wdipi-accent-rgb), 0.3)',
       }}>
         <div>
           <h1 className="serif" style={{
@@ -969,14 +998,15 @@ export default function Home() {
             margin: 0,
             fontStyle: 'italic',
             letterSpacing: '-0.015em',
+            color: 'var(--wdipi-surface)',
           }}>
             Where&apos;d I<br />put it
           </h1>
-          <p style={{ fontSize: 14, color: 'var(--wdipi-body)', margin: '10px 0 0', lineHeight: 1.4, maxWidth: 340 }}>
+          <p style={{ fontSize: 14, color: 'rgba(255,255,255,0.88)', margin: '10px 0 0', lineHeight: 1.4, maxWidth: 340 }}>
             Save what you own and where it is. Then find it later — by typing or by talking.
           </p>
           {userEmail && (
-            <p style={{ fontSize: 12, color: 'var(--wdipi-muted)', margin: '4px 0 0' }}>
+            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', margin: '4px 0 0' }}>
               Signed in as {userEmail}
             </p>
           )}
@@ -987,10 +1017,10 @@ export default function Home() {
             title="How to use this app"
             aria-label="How to use this app"
             style={{
-              background: showHelp ? 'var(--wdipi-ink)' : 'transparent',
-              color: showHelp ? 'var(--wdipi-surface)' : 'var(--wdipi-body)',
-              border: '1px solid var(--wdipi-border)',
-              borderRadius: 6,
+              background: showHelp ? 'var(--wdipi-surface)' : 'rgba(255,255,255,0.16)',
+              color: showHelp ? 'var(--wdipi-accent)' : 'var(--wdipi-surface)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 999,
               padding: '8px 9px',
               display: 'flex',
               alignItems: 'center',
@@ -1003,10 +1033,10 @@ export default function Home() {
             title="Change background theme"
             aria-label="Change background theme"
             style={{
-              background: showThemePicker ? 'var(--wdipi-ink)' : 'transparent',
-              color: showThemePicker ? 'var(--wdipi-surface)' : 'var(--wdipi-body)',
-              border: '1px solid var(--wdipi-border)',
-              borderRadius: 6,
+              background: showThemePicker ? 'var(--wdipi-surface)' : 'rgba(255,255,255,0.16)',
+              color: showThemePicker ? 'var(--wdipi-accent)' : 'var(--wdipi-surface)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 999,
               padding: '8px 9px',
               display: 'flex',
               alignItems: 'center',
@@ -1019,11 +1049,11 @@ export default function Home() {
             title="Sign out"
             aria-label="Sign out"
             style={{
-              background: 'transparent',
-              border: '1px solid var(--wdipi-border)',
-              borderRadius: 6,
+              background: 'rgba(255,255,255,0.16)',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 999,
               padding: '8px 10px',
-              color: 'var(--wdipi-body)',
+              color: 'var(--wdipi-surface)',
               display: 'flex',
               alignItems: 'center',
               gap: 6,
@@ -1113,11 +1143,12 @@ export default function Home() {
           gap: 6,
           background: 'var(--wdipi-surface)',
           border: '1px solid var(--wdipi-border)',
-          borderRadius: 10,
-          padding: '4px 4px 4px 14px',
+          borderRadius: 999,
+          padding: '4px 4px 4px 18px',
           alignItems: 'center',
+          boxShadow: '0 2px 10px rgba(var(--wdipi-accent-rgb), 0.08)',
         }}>
-          <Search size={16} color="var(--wdipi-muted)" style={{ flexShrink: 0 }} />
+          <Search size={16} color="var(--wdipi-accent)" style={{ flexShrink: 0 }} />
           <input
             type="text"
             placeholder="What are you looking for?"
@@ -1153,14 +1184,15 @@ export default function Home() {
               className={listeningField === 'search' ? 'listening-pulse' : ''}
               aria-label={listeningField === 'search' ? 'Stop listening' : 'Voice search'}
               style={{
-                background: listeningField === 'search' ? 'var(--wdipi-accent)' : 'var(--wdipi-ink)',
+                background: 'var(--wdipi-accent)',
                 color: 'var(--wdipi-surface)',
                 border: 'none',
-                borderRadius: 7,
+                borderRadius: 999,
                 padding: '10px 12px',
                 display: 'flex',
                 alignItems: 'center',
                 flexShrink: 0,
+                boxShadow: '0 3px 10px rgba(var(--wdipi-accent-rgb), 0.3)',
               }}
             >
               {listeningField === 'search' ? <MicOff size={16} /> : <Mic size={16} />}
@@ -1222,8 +1254,8 @@ export default function Home() {
                   }}>
                     {m.name}
                   </div>
-                  <div style={{ fontSize: 15, marginTop: 6, color: 'var(--wdipi-text2)' }}>
-                    <span className="highlight">{m.location}</span>
+                  <div style={{ fontSize: 14, marginTop: 8 }}>
+                    <span style={locationChipStyle}>{m.location}</span>
                   </div>
                   {m.confidence === 'low' && (
                     <div style={{
@@ -1266,17 +1298,24 @@ export default function Home() {
               if (handsFreeActive) stopHandsFree();
             }
           }}
-          style={{
-            background: showAdd ? 'transparent' : 'var(--wdipi-ink)',
-            color: showAdd ? 'var(--wdipi-body)' : 'var(--wdipi-surface)',
-            border: showAdd ? '1px solid var(--wdipi-border)' : 'none',
-            borderRadius: 6,
+          style={showAdd ? {
+            background: 'transparent',
+            color: 'var(--wdipi-body)',
+            border: '1px solid var(--wdipi-border)',
+            borderRadius: 999,
             padding: '9px 16px',
             fontSize: 14,
             display: 'flex',
             alignItems: 'center',
             gap: 5,
             fontWeight: 500,
+          } : {
+            ...pillButtonStyle,
+            padding: '10px 18px',
+            fontSize: 14,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
           }}
         >
           {showAdd ? <><X size={14} /> Close</> : <><Plus size={15} /> Add item</>}
@@ -1366,14 +1405,15 @@ export default function Home() {
                 aria-label="Add the whole item by voice"
                 title="Add the whole item by voice"
                 style={{
-                  background: 'var(--wdipi-ink)',
+                  background: 'var(--wdipi-accent)',
                   color: 'var(--wdipi-surface)',
                   border: 'none',
-                  borderRadius: 6,
-                  padding: 7,
+                  borderRadius: 999,
+                  padding: 8,
                   display: 'flex',
                   alignItems: 'center',
                   flexShrink: 0,
+                  boxShadow: '0 3px 10px rgba(var(--wdipi-accent-rgb), 0.3)',
                 }}
               >
                 <Mic size={15} />
@@ -1473,15 +1513,12 @@ export default function Home() {
               onClick={addItem}
               disabled={!newName.trim() || !newLocation.trim()}
               style={{
-                background: 'var(--wdipi-ink)',
-                color: 'var(--wdipi-surface)',
-                border: 'none',
-                borderRadius: 6,
+                ...pillButtonStyle,
                 padding: '10px 18px',
                 fontSize: 14,
-                fontWeight: 500,
                 opacity: newName.trim() && newLocation.trim() ? 1 : 0.4,
                 cursor: newName.trim() && newLocation.trim() ? 'pointer' : 'not-allowed',
+                boxShadow: newName.trim() && newLocation.trim() ? pillButtonStyle.boxShadow : 'none',
               }}
             >
               Save it
@@ -1548,13 +1585,9 @@ export default function Home() {
             <button
               onClick={() => setShowAdd(true)}
               style={{
-                background: 'var(--wdipi-ink)',
-                color: 'var(--wdipi-surface)',
-                border: 'none',
-                borderRadius: 6,
+                ...pillButtonStyle,
                 padding: '10px 20px',
                 fontSize: 14,
-                fontWeight: 500,
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
@@ -1569,16 +1602,18 @@ export default function Home() {
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
           gap: 12,
-        } : undefined}>
-          {items.map((item, idx) => (
-            <div key={item.id} style={viewMode === 'grid' ? {
-              padding: 14,
+        } : {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}>
+          {items.map((item) => (
+            <div key={item.id} style={{
+              padding: viewMode === 'grid' ? 14 : '16px 18px',
               border: '1px solid var(--wdipi-border)',
-              borderRadius: 10,
+              borderRadius: 12,
               background: 'var(--wdipi-surface)',
-            } : {
-              padding: '16px 0',
-              borderBottom: idx < items.length - 1 ? '1px solid var(--wdipi-border)' : 'none',
+              boxShadow: cardShadow,
             }}>
               <div style={{
                 display: 'flex',
@@ -1674,12 +1709,11 @@ export default function Home() {
                   ) : (
                     <>
                       <div style={{
-                        fontSize: 15,
-                        marginTop: 6,
-                        color: 'var(--wdipi-text2)',
+                        fontSize: 14,
+                        marginTop: 8,
                         wordBreak: 'break-word',
                       }}>
-                        <span className="highlight">{item.location}</span>
+                        <span style={locationChipStyle}>{item.location}</span>
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--wdipi-muted)', marginTop: 6 }}>
                         updated {timeAgo(item.updated_at)}
