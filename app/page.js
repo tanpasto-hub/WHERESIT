@@ -78,6 +78,7 @@ export default function Home() {
   const recognitionRef = useRef(null);
   const handsFreeCancelRef = useRef(false);
   const itemsRef = useRef(items);
+  const usVoiceRef = useRef(undefined); // undefined = not looked up yet, null = none found
   const router = useRouter();
   const supabase = createClient();
 
@@ -106,7 +107,17 @@ export default function Home() {
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
     if (SR) setVoiceSupported(true);
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) setSpeechSupported(true);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      setSpeechSupported(true);
+      // Voice lists load asynchronously on some browsers/OSes (the first
+      // getVoices() call can come back empty until 'voiceschanged' fires),
+      // so look up a US English voice once up front and cache it in a ref.
+      // Doing this ahead of time — rather than inside speak() — keeps
+      // speak() itself synchronous, which matters on strict mobile browsers
+      // that only allow audio to start when it's tied directly to the user
+      // gesture that triggered it.
+      pickUSVoice();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -169,6 +180,40 @@ export default function Home() {
   // Speaks a line out loud and resolves once it's finished (or immediately,
   // if speech synthesis isn't available — the hands-free flow still works,
   // it just relies on the on-screen caption instead).
+  // Looks through the browser's installed speech-synthesis voices for a US
+  // English one and caches it in usVoiceRef, so spoken prompts default to a
+  // US accent instead of whatever locale voice happens to be first in the
+  // list on the person's device. Safe to call more than once — it only does
+  // the actual lookup the first time.
+  const pickUSVoice = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (usVoiceRef.current !== undefined) return;
+
+    const choose = (voices) => {
+      const usVoices = voices.filter((v) => v.lang === 'en-US' || v.lang === 'en_US');
+      if (usVoices.length === 0) return null;
+      // Prefer a natural-sounding, well-known US voice when the platform
+      // offers one; otherwise just take the first US English voice listed.
+      const preferred = usVoices.find((v) =>
+        /Samantha|Google US English|Microsoft Aria|Microsoft Guy|Ava|Zira/i.test(v.name)
+      );
+      return preferred || usVoices[0];
+    };
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      usVoiceRef.current = choose(voices) || null;
+      return;
+    }
+
+    // Voice list isn't loaded yet on this browser — wait for it once.
+    const onVoicesChanged = () => {
+      window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+      usVoiceRef.current = choose(window.speechSynthesis.getVoices()) || null;
+    };
+    window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+  };
+
   const speak = (text) => {
     setVoiceCaption(text);
     return new Promise((resolve) => {
@@ -179,6 +224,11 @@ export default function Home() {
       try {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(text);
+        // Force a US English voice so prompts don't come out in whatever
+        // locale accent the device defaults to.
+        utter.lang = 'en-US';
+        pickUSVoice();
+        if (usVoiceRef.current) utter.voice = usVoiceRef.current;
         utter.onend = () => resolve();
         utter.onerror = () => resolve();
         window.speechSynthesis.speak(utter);
