@@ -279,26 +279,26 @@ export default function Home() {
 
     try {
       while (true) {
-        let name;
+        let heard;
         if (first) {
-          setVoiceCaption('What is it?');
-          const namePromise = listenFor('name');
-          speak('What is it?');
-          name = await namePromise;
+          setVoiceCaption('What is it, and where did you put it?');
+          const heardPromise = listenFor('name');
+          speak('What is it, and where did you put it? For example: chair, office room.');
+          heard = await heardPromise;
         } else {
-          await speak('Next item — what is it? Or say "done" if that\'s everything.');
+          await speak('Next item — what is it and where did you put it? Or say "done" if that\'s everything.');
           if (cancelled()) return;
-          name = await listenFor('name');
+          heard = await listenFor('name');
         }
         if (cancelled()) return;
 
-        if (!name) {
+        if (!heard) {
           await speak(savedCount > 0
             ? `Okay, done — I added ${savedCount} ${savedCount === 1 ? 'item' : 'items'}.`
             : "I didn't catch that. Let's try again whenever you're ready.");
           return;
         }
-        if (soundsLikeDone(name)) {
+        if (soundsLikeDone(heard)) {
           await speak(savedCount > 0
             ? `Done — I added ${savedCount} ${savedCount === 1 ? 'item' : 'items'}.`
             : 'Okay, nothing added.');
@@ -306,7 +306,28 @@ export default function Home() {
         }
 
         first = false;
+
+        // People naturally say the whole thing in one breath ("chair, it's
+        // in the office room") rather than waiting for two separate
+        // questions, so let AI split what was heard into name + location
+        // instead of dumping the entire sentence into the name field.
+        let name = heard;
+        let location = null;
+        try {
+          const parseRes = await fetch('/api/parse-item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: heard }),
+          });
+          const parsed = await parseRes.json();
+          if (parsed?.name) name = parsed.name;
+          if (parsed?.location) location = parsed.location;
+        } catch {
+          // fall back to treating the whole utterance as just the name
+        }
+        if (cancelled()) return;
         setNewName(name);
+        if (location) setNewLocation(location);
 
         // Use itemsRef (not the items/distinctNames closed over when this
         // loop started) so an item saved earlier in the same voice session
@@ -323,15 +344,18 @@ export default function Home() {
           }
         }
 
-        await speak('Where did you put it?');
-        if (cancelled()) return;
-        let location = await listenFor('location');
-        if (cancelled()) return;
+        // Only ask separately if they didn't already say where it was.
         if (!location) {
-          await speak("I didn't catch that, so I couldn't save that one. Let's keep going.");
-          setNewName('');
-          setNewLocation('');
-          continue;
+          await speak('And where did you put it?');
+          if (cancelled()) return;
+          location = await listenFor('location');
+          if (cancelled()) return;
+          if (!location) {
+            await speak("I didn't catch that, so I couldn't save that one. Let's keep going.");
+            setNewName('');
+            setNewLocation('');
+            continue;
+          }
         }
         setNewLocation(location);
 
@@ -950,8 +974,8 @@ export default function Home() {
           {!handsFreeActive && (
             <p style={{ fontSize: 12, color: '#8C877A', margin: '0 0 12px', lineHeight: 1.4 }}>
               Type both boxes, or tap <Mic size={11} style={{ verticalAlign: -1 }} /> on the first
-              one — then just keep talking, one item after another, and say
-              &ldquo;done&rdquo; when you&apos;re finished.
+              one and just say it all at once — &ldquo;chair, office room&rdquo; — then keep
+              going, one item after another, and say &ldquo;done&rdquo; when you&apos;re finished.
             </p>
           )}
           <div style={{
