@@ -79,6 +79,17 @@ export default function Home() {
   const handsFreeCancelRef = useRef(false);
   const itemsRef = useRef(items);
   const usVoiceRef = useRef(undefined); // undefined = not looked up yet, null = none found
+  // Whether this browser has ever successfully started microphone capture
+  // before (i.e. the permission prompt, if any, has already been answered).
+  // Once true, we no longer need to race the mic start against the user's
+  // tap — we can speak the full prompt first and *then* listen, giving a
+  // real pause to answer instead of listening while the prompt is still
+  // talking. Persisted so it survives reloads, not just this session.
+  const micUnlockedRef = useRef(
+    typeof window !== 'undefined' && window.localStorage
+      ? window.localStorage.getItem('wdipi_mic_unlocked') === '1'
+      : false
+  );
   const router = useRouter();
   const supabase = createClient();
 
@@ -274,6 +285,19 @@ export default function Home() {
       setListeningField(null);
       resolve(value);
     };
+    recognition.onstart = () => {
+      // Audio capture actually began, so the mic permission prompt (if any)
+      // has been answered — remember that so future prompts can speak in
+      // full before listening instead of racing the user's tap.
+      micUnlockedRef.current = true;
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('wdipi_mic_unlocked', '1');
+        }
+      } catch {
+        // localStorage can throw in private-browsing modes — not worth failing over.
+      }
+    };
     recognition.onresult = (event) => finish(event.results[0][0].transcript.trim());
     recognition.onerror = () => finish('');
     recognition.onend = () => finish('');
@@ -331,10 +355,25 @@ export default function Home() {
       while (true) {
         let heard;
         if (first) {
-          setVoiceCaption('What is it, and where did you put it?');
-          const heardPromise = listenFor('name');
-          speak('What is it, and where did you put it? For example: chair, office room.');
-          heard = await heardPromise;
+          if (micUnlockedRef.current) {
+            // The mic has already been used successfully on this device
+            // before, so there's no permission prompt to race against —
+            // speak the full prompt first, THEN start listening, so the
+            // person gets the whole pause to answer instead of the mic
+            // racing (and often losing) against the prompt still talking.
+            await speak('What is it, and where did you put it? For example: chair, office room.');
+            if (cancelled()) return;
+            heard = await listenFor('name');
+          } else {
+            // First-ever mic use on this device/browser: some mobile
+            // browsers only allow the mic permission prompt to appear when
+            // it's triggered synchronously by the tap itself, so start
+            // listening immediately (before speaking) this one time.
+            setVoiceCaption('What is it, and where did you put it?');
+            const heardPromise = listenFor('name');
+            speak('What is it, and where did you put it? For example: chair, office room.');
+            heard = await heardPromise;
+          }
         } else {
           await speak('Next item — what is it and where did you put it? Or say "done" if that\'s everything.');
           if (cancelled()) return;
